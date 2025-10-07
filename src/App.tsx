@@ -4,11 +4,13 @@ import SignupPage from '@/pages/SignupPage'
 import OTPPage from '@/pages/OTPPage'
 import ForgotPasswordPage from '@/pages/ForgotPasswordPage'
 import ResetPasswordPage from '@/pages/ResetPasswordPage'
+import DashboardPage from '@/pages/Dashboard'
 
 function App() {
   return (
     <BrowserRouter>
       <Routes>
+        <Route path="/dashboard" element={<DashboardPage />} />
         <Route path="/" element={<Navigate to="/login" replace />} />
         <Route path="/login" element={<LoginPage />} />
         <Route path="/signup" element={<SignupPage />} />

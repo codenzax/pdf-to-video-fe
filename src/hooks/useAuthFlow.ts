@@ -13,7 +13,7 @@ export function useHandleLogin() {
         const data: any = res.data
         if (data?.accessToken) {
           toast.success('Logged in successfully')
-          navigate('/', { replace: true })
+          navigate('/dashboard', { replace: true })
         } else if (data?.email) {
           console.log(res)
           toast.info(data.message)
@@ -137,6 +137,7 @@ export function useHandleResetPassword() {
 }
 
 export function useHandleOtp() {
+  const navigate = useNavigate()
   const [verifyOtpAndLogin, verifyState] = useVerifyOtpAndLoginMutation()
   const [resendOtp, resendState] = useResendOtpMutation()
 
@@ -151,7 +152,7 @@ export function useHandleOtp() {
       if ('data' in res && res.data?.accessToken) {
         toast.success('Email verified, you are logged in')
         localStorage.removeItem('pendingEmail')
-        // Optional: redirect here if desired
+        navigate('/dashboard', { replace: true })
       } else if ('error' in res) {
         const err: any = res.error
         // Handle validation errors with specific field messages
