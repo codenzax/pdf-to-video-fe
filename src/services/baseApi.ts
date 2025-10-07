@@ -1,0 +1,66 @@
+import { createApi, fetchBaseQuery } from '@reduxjs/toolkit/query/react'
+import { API_BASE_URL } from '@/lib/env'
+
+export const TAGS = {
+  Auth: 'Auth',
+  User: 'User',
+} as const
+
+type Tags = typeof TAGS[keyof typeof TAGS]
+
+const rawBaseQuery = fetchBaseQuery({
+  baseUrl: API_BASE_URL,
+  prepareHeaders: (headers) => {
+    const token = localStorage.getItem('accessToken')
+    if (token) headers.set('authorization', `Bearer ${token}`)
+    headers.set('accept', 'application/json')
+    return headers
+  },
+  credentials: 'include',
+})
+
+const baseQueryWithReauth: typeof rawBaseQuery = async (args, api, extraOptions) => {
+  const result = await rawBaseQuery(args, api, extraOptions)
+
+  // Only attempt refresh for protected, non-auth endpoints
+  const urlPath = typeof args === 'string' ? args : (args as any)?.url ?? ''
+  const isAuthPath = urlPath.startsWith('/auth/')
+
+  if (!isAuthPath && result.error && (result.error as any).status === 401) {
+    const refreshToken = localStorage.getItem('refreshToken')
+    if (refreshToken) {
+      const refreshResult = await rawBaseQuery(
+        {
+          url: '/auth/refresh',
+          method: 'POST',
+          body: { refreshToken },
+        },
+        api,
+        extraOptions,
+      )
+      const data = (refreshResult as any).data as { data?: { accessToken?: string } }
+      const newAccessToken = data?.data?.accessToken
+      if (newAccessToken) {
+        localStorage.setItem('accessToken', newAccessToken)
+        return rawBaseQuery(args, api, extraOptions)
+      } else {
+        localStorage.removeItem('accessToken')
+        localStorage.removeItem('refreshToken')
+      }
+    }
+  }
+
+  return result
+}
+
+export const baseApi = createApi({
+  reducerPath: 'api',
+  baseQuery: baseQueryWithReauth,
+  tagTypes: Object.values(TAGS) as Tags[],
+  keepUnusedDataFor: 60,
+  refetchOnFocus: true,
+  refetchOnReconnect: true,
+  endpoints: () => ({}),
+})
+
+
