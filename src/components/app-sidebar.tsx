@@ -29,123 +29,114 @@ import {
 const data = {
   teams: [
     {
-      name: "Acme Inc",
+      name: "PDF to Video",
       logo: GalleryVerticalEnd,
-      plan: "Enterprise",
-    },
-    {
-      name: "Acme Corp.",
-      logo: AudioWaveform,
-      plan: "Startup",
-    },
-    {
-      name: "Evil Corp.",
-      logo: Command,
-      plan: "Free",
+      plan: "Pro",
     },
   ],
   navMain: [
     {
-      title: "Playground",
-      url: "#",
+      title: "Dashboard",
+      url: "/dashboard",
       icon: SquareTerminal,
       isActive: true,
-      items: [
-        {
-          title: "History",
-          url: "#",
-        },
-        {
-          title: "Starred",
-          url: "#",
-        },
-        {
-          title: "Settings",
-          url: "#",
-        },
-      ],
     },
     {
-      title: "Models",
-      url: "#",
+      title: "PDF to Video",
+      url: "",
       icon: Bot,
       items: [
         {
-          title: "Genesis",
-          url: "#",
+          title: "Convert PDF",
+          url: "/pdf-to-video",
         },
         {
-          title: "Explorer",
-          url: "#",
+          title: "Templates",
+          url: "/pdf-to-video/templates",
         },
         {
-          title: "Quantum",
-          url: "#",
+          title: "History",
+          url: "/pdf-to-video/history",
         },
       ],
     },
     {
-      title: "Documentation",
-      url: "#",
-      icon: BookOpen,
+      title: "Projects",
+      url: "/projects",
+      icon: Frame,
       items: [
         {
-          title: "Introduction",
-          url: "#",
+          title: "All Projects",
+          url: "/projects",
         },
         {
-          title: "Get Started",
-          url: "#",
+          title: "Recent",
+          url: "/projects/recent",
         },
         {
-          title: "Tutorials",
-          url: "#",
+          title: "Favorites",
+          url: "/projects/favorites",
+        },
+      ],
+    },
+    {
+      title: "Analytics",
+      url: "/analytics",
+      icon: PieChart,
+      items: [
+        {
+          title: "Overview",
+          url: "/analytics",
         },
         {
-          title: "Changelog",
-          url: "#",
+          title: "Video Performance",
+          url: "/analytics/videos",
+        },
+        {
+          title: "User Engagement",
+          url: "/analytics/engagement",
         },
       ],
     },
     {
       title: "Settings",
-      url: "#",
+      url: "/settings",
       icon: Settings2,
       items: [
         {
           title: "General",
-          url: "#",
+          url: "/settings",
         },
         {
-          title: "Team",
-          url: "#",
+          title: "Account",
+          url: "/settings/account",
         },
         {
           title: "Billing",
-          url: "#",
+          url: "/settings/billing",
         },
         {
-          title: "Limits",
-          url: "#",
+          title: "API Keys",
+          url: "/settings/api",
         },
       ],
     },
   ],
   projects: [
     {
-      name: "Design Engineering",
-      url: "#",
-      icon: Frame,
-    },
-    {
-      name: "Sales & Marketing",
-      url: "#",
+      name: "Marketing Videos",
+      url: "/projects/marketing",
       icon: PieChart,
     },
     {
-      name: "Travel",
-      url: "#",
-      icon: Map,
+      name: "Educational Content",
+      url: "/projects/educational",
+      icon: BookOpen,
+    },
+    {
+      name: "Product Demos",
+      url: "/projects/demos",
+      icon: Frame,
     },
   ],
 }

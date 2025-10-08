@@ -4,7 +4,12 @@ import SignupPage from '@/pages/SignupPage'
 import OTPPage from '@/pages/OTPPage'
 import ForgotPasswordPage from '@/pages/ForgotPasswordPage'
 import ResetPasswordPage from '@/pages/ResetPasswordPage'
-import DashboardPage from '@/pages/Dashboard'
+import DashboardPage from '@/pages/dashboard/DashboardPage'
+import PdfToVideoPage from '@/pages/dashboard/PdfToVideoPage'
+import ProjectsPage from '@/pages/dashboard/ProjectsPage'
+import AnalyticsPage from '@/pages/dashboard/AnalyticsPage'
+import ProfilePage from '@/pages/dashboard/ProfilePage'
+import SettingsPage from '@/pages/dashboard/SettingsPage'
 import { ProtectedRoute, PublicRoute } from '@/components/routes/ProtectedRoute'
 
 export function AppRoutes() {
@@ -58,6 +63,46 @@ export function AppRoutes() {
         element={
           <ProtectedRoute>
             <DashboardPage />
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/pdf-to-video"
+        element={
+          <ProtectedRoute>
+            <PdfToVideoPage />
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/projects"
+        element={
+          <ProtectedRoute>
+            <ProjectsPage />
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/analytics"
+        element={
+          <ProtectedRoute>
+            <AnalyticsPage />
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/profile"
+        element={
+          <ProtectedRoute>
+            <ProfilePage />
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/settings"
+        element={
+          <ProtectedRoute>
+            <SettingsPage />
           </ProtectedRoute>
         }
       />
