@@ -11,6 +11,7 @@ import {
   Settings2,
   SquareTerminal,
 } from "lucide-react"
+import { useAppSelector } from '@/store/hooks'
 
 import { NavMain } from "@/components/nav-main"
 import { NavProjects } from "@/components/nav-projects"
@@ -26,11 +27,6 @@ import {
 
 // This is sample data.
 const data = {
-  user: {
-    name: "shadcn",
-    email: "m@example.com",
-    avatar: "/avatars/shadcn.jpg",
-  },
   teams: [
     {
       name: "Acme Inc",
@@ -155,6 +151,19 @@ const data = {
 }
 
 export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
+  const { user } = useAppSelector((state) => state.auth)
+  
+  // Create user data for NavUser component
+  const userData = user ? {
+    name: `${user.firstName} ${user.lastName}`,
+    email: user.email,
+    avatar: "/avatars/user.jpg", // You can implement avatar logic later
+  } : {
+    name: "Guest",
+    email: "guest@example.com",
+    avatar: "/avatars/guest.jpg",
+  }
+
   return (
     <Sidebar collapsible="icon" {...props}>
       <SidebarHeader>
@@ -165,7 +174,7 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
         <NavProjects projects={data.projects} />
       </SidebarContent>
       <SidebarFooter>
-        <NavUser user={data.user} />
+        <NavUser user={userData} />
       </SidebarFooter>
       <SidebarRail />
     </Sidebar>

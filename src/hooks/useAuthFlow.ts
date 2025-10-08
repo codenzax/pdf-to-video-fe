@@ -1,9 +1,12 @@
 import { useNavigate } from 'react-router-dom'
 import { useLoginMutation, useRegisterMutation, useForgotPasswordMutation, useResetPasswordMutation, useVerifyOtpAndLoginMutation, useResendOtpMutation } from '@/services/authApi'
+import { useAppDispatch } from '@/store/hooks'
+import { setCredentials, User } from '@/store/authSlice'
 import { toast } from 'sonner'
 
 export function useHandleLogin() {
   const navigate = useNavigate()
+  const dispatch = useAppDispatch()
   const [login, state] = useLoginMutation()
 
   async function submit(credentials: { email: string; password: string }) {
@@ -12,6 +15,12 @@ export function useHandleLogin() {
       if ('data' in res) {
         const data: any = res.data
         if (data?.accessToken) {
+          // Store user data in Redux
+          dispatch(setCredentials({
+            user: data.user,
+            accessToken: data.accessToken,
+            refreshToken: data.refreshToken
+          }))
           toast.success('Logged in successfully')
           navigate('/dashboard', { replace: true })
         } else if (data?.email) {
@@ -138,6 +147,7 @@ export function useHandleResetPassword() {
 
 export function useHandleOtp() {
   const navigate = useNavigate()
+  const dispatch = useAppDispatch()
   const [verifyOtpAndLogin, verifyState] = useVerifyOtpAndLoginMutation()
   const [resendOtp, resendState] = useResendOtpMutation()
 
@@ -150,6 +160,12 @@ export function useHandleOtp() {
     try {
       const res = await verifyOtpAndLogin({ email: targetEmail, otp })
       if ('data' in res && res.data?.accessToken) {
+        // Store user data in Redux
+        dispatch(setCredentials({
+          user: res.data.user as User,
+          accessToken: res.data.accessToken,
+          refreshToken: res.data.refreshToken
+        }))
         toast.success('Email verified, you are logged in')
         localStorage.removeItem('pendingEmail')
         navigate('/dashboard', { replace: true })
@@ -195,5 +211,3 @@ export function useHandleOtp() {
 
   return { submit, resend, isLoading: verifyState.isLoading, isResending: resendState.isLoading }
 }
-
-
