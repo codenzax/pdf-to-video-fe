@@ -76,11 +76,11 @@ export function SignupForm({ ...props }: React.ComponentProps<typeof Card>) {
                 <Button type="submit" disabled={isLoading}>
                   {isLoading ? 'Creating Account...' : 'Create Account'}
                 </Button>
-                <Button variant="outline" type="button">
+                {/* <Button variant="outline" type="button">
                   Sign up with Google
-                </Button>
+                </Button> */}
                 <FieldDescription className="px-6 text-center">
-                  Already have an account? <a href="#">Sign in</a>
+                  Already have an account? <span>Sign in</span>
                 </FieldDescription>
               </Field>
             </FieldGroup>

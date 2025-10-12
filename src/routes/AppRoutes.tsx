@@ -11,6 +11,7 @@ import AnalyticsPage from '@/pages/dashboard/AnalyticsPage'
 import ProfilePage from '@/pages/dashboard/ProfilePage'
 import SettingsPage from '@/pages/dashboard/SettingsPage'
 import { ProtectedRoute, PublicRoute } from '@/components/routes/ProtectedRoute'
+import PdfToVideoConvertPage from '@/pages/dashboard/PdfToVideoConvertPage'
 
 export function AppRoutes() {
   return (
@@ -71,6 +72,14 @@ export function AppRoutes() {
         element={
           <ProtectedRoute>
             <PdfToVideoPage />
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/pdf-to-video/convert"
+        element={
+          <ProtectedRoute>
+            <PdfToVideoConvertPage />
           </ProtectedRoute>
         }
       />

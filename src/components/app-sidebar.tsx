@@ -1,12 +1,9 @@
 import * as React from "react"
 import {
-  AudioWaveform,
   BookOpen,
   Bot,
-  Command,
   Frame,
   GalleryVerticalEnd,
-  Map,
   PieChart,
   Settings2,
   SquareTerminal,
@@ -43,12 +40,12 @@ const data = {
     },
     {
       title: "PDF to Video",
-      url: "",
+      url: "/pdf-to-video",
       icon: Bot,
       items: [
         {
           title: "Convert PDF",
-          url: "/pdf-to-video",
+          url: "/pdf-to-video/convert",
         },
         {
           title: "Templates",
