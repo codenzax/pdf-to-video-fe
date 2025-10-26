@@ -5,6 +5,7 @@ import { API_BASE_URL } from '@/lib/env'
 export const TAGS = {
   Auth: 'Auth',
   User: 'User',
+  PdfProcessing: 'PdfProcessing',
 } as const
 
 type Tags = typeof TAGS[keyof typeof TAGS]

@@ -16,7 +16,7 @@ interface BreadcrumbItem {
 // Route configuration with breadcrumb mapping
 const routeConfig: Record<string, { label: string; parent?: string }> = {
   '/dashboard': { label: 'Dashboard' },
-  '/pdf-to-video': { label: 'PDF to Video', parent: '/dashboard' },
+  '/pdf-to-video': { label: 'File to Video', parent: '/dashboard' },
   '/pdf-to-video/templates': { label: 'Templates', parent: '/pdf-to-video' },
   '/pdf-to-video/history': { label: 'History', parent: '/pdf-to-video' },
   '/projects': { label: 'Projects', parent: '/dashboard' },

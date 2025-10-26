@@ -12,6 +12,7 @@ import ProfilePage from '@/pages/dashboard/ProfilePage'
 import SettingsPage from '@/pages/dashboard/SettingsPage'
 import { ProtectedRoute, PublicRoute } from '@/components/routes/ProtectedRoute'
 import PdfToVideoConvertPage from '@/pages/dashboard/PdfToVideoConvertPage'
+import ScriptGenerationPage from '@/pages/dashboard/ScriptGenerationPage'
 
 export function AppRoutes() {
   return (
@@ -80,6 +81,14 @@ export function AppRoutes() {
         element={
           <ProtectedRoute>
             <PdfToVideoConvertPage />
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/script-generation"
+        element={
+          <ProtectedRoute>
+            <ScriptGenerationPage />
           </ProtectedRoute>
         }
       />

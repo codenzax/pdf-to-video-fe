@@ -4,6 +4,7 @@ import {
   Bot,
   Frame,
   GalleryVerticalEnd,
+  FileText,
   PieChart,
   Settings2,
   SquareTerminal,
@@ -26,7 +27,7 @@ import {
 const data = {
   teams: [
     {
-      name: "PDF to Video",
+      name: "PDF TO VIDEO",
       logo: GalleryVerticalEnd,
       plan: "Pro",
     },
@@ -39,12 +40,12 @@ const data = {
       isActive: true,
     },
     {
-      title: "PDF to Video",
+      title: "PDF TO VIDEO",
       url: "/pdf-to-video",
       icon: Bot,
       items: [
         {
-          title: "Convert PDF",
+          title: "Convert File",
           url: "/pdf-to-video/convert",
         },
         {
@@ -56,6 +57,12 @@ const data = {
           url: "/pdf-to-video/history",
         },
       ],
+    },
+    {
+      title: "Script Generation",
+      url: "/script-generation",
+      icon: FileText,
+      isActive: false,
     },
     {
       title: "Projects",

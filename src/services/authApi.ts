@@ -29,7 +29,7 @@ type RefreshResponse = { accessToken: string }
 type ChangePasswordRequest = { currentPassword: string; newPassword: string }
 type DeleteAccountRequest = { password: string }
 
-type UserProfile = { id: string; email: string; firstName?: string; lastName?: string; phone?: string }
+type UserProfile = { id: number; email: string; firstName?: string; lastName?: string; phone?: string }
 type UpdateProfileRequest = Partial<Pick<UserProfile, 'firstName' | 'lastName' | 'phone'>>
 
 export const authApi = baseApi.injectEndpoints({

@@ -159,18 +159,34 @@ export function useHandleOtp() {
     }
     try {
       const res = await verifyOtpAndLogin({ email: targetEmail, otp })
+      console.log('OTP verification response:', res)
       if ('data' in res && res.data?.accessToken) {
+        console.log('User data from backend:', res.data.user)
+        
+        // Ensure user has isEmailVerified set to true
+        const userData = {
+          ...(res.data.user as object),
+          isEmailVerified: true
+        }
+        
         // Store user data in Redux
         dispatch(setCredentials({
-          user: res.data.user as User,
+          user: userData as User,
           accessToken: res.data.accessToken,
           refreshToken: res.data.refreshToken
         }))
+        
         toast.success('Email verified, you are logged in')
         localStorage.removeItem('pendingEmail')
-        navigate('/dashboard', { replace: true })
+        
+        // Force navigation after a small delay
+        setTimeout(() => {
+          console.log('Navigating to dashboard...')
+          navigate('/dashboard', { replace: true })
+        }, 100)
       } else if ('error' in res) {
         const err: any = res.error
+        console.error('OTP verification error:', err)
         // Handle validation errors with specific field messages
         if (err?.data?.data && Array.isArray(err.data.data)) {
           const firstError = err.data.data[0]
@@ -180,6 +196,7 @@ export function useHandleOtp() {
         }
       }
     } catch (e) {
+      console.error('OTP verification exception:', e)
       toast.error('Something went wrong')
     }
   }
