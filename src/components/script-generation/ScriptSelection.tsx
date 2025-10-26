@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
-import { CheckCircle, FileText } from 'lucide-react'
+import { CheckCircle, FileText, ChevronDown, ChevronUp } from 'lucide-react'
 import { ScriptData } from '@/services/geminiService'
 import { toast } from 'sonner'
 
@@ -13,9 +13,23 @@ interface ScriptSelectionProps {
 
 export function ScriptSelection({ scripts, onSelect }: ScriptSelectionProps) {
   const [selectedIndex, setSelectedIndex] = useState<number | null>(null)
+  const [expandedCards, setExpandedCards] = useState<Set<number>>(new Set())
 
   const handleSelectScript = (index: number) => {
     setSelectedIndex(index)
+  }
+
+  const toggleCardExpansion = (index: number, e: React.MouseEvent) => {
+    e.stopPropagation()
+    setExpandedCards(prev => {
+      const newSet = new Set(prev)
+      if (newSet.has(index)) {
+        newSet.delete(index)
+      } else {
+        newSet.add(index)
+      }
+      return newSet
+    })
   }
 
   const handleConfirmSelection = () => {
@@ -41,6 +55,7 @@ export function ScriptSelection({ scripts, onSelect }: ScriptSelectionProps) {
       <div className="grid gap-4 md:grid-cols-3">
         {scripts.map((script, index) => {
           const isSelected = selectedIndex === index
+          const isExpanded = expandedCards.has(index)
           const sentences = script.sentences || []
 
           return (
@@ -65,22 +80,39 @@ export function ScriptSelection({ scripts, onSelect }: ScriptSelectionProps) {
                 </CardDescription>
               </CardHeader>
               <CardContent className="space-y-3">
-                {/* Preview of first few sentences */}
-                <div className="space-y-2 max-h-60 overflow-y-auto">
-                  {sentences.slice(0, 3).map((sentence, i) => (
+                {/* Full script preview with expand/collapse */}
+                <div className={`space-y-2 overflow-y-auto ${isExpanded ? 'max-h-[400px]' : 'max-h-60'}`}>
+                  {(isExpanded ? sentences : sentences.slice(0, 3)).map((sentence, i) => (
                     <p
                       key={i}
-                      className="text-sm text-muted-foreground line-clamp-3"
+                      className="text-sm text-muted-foreground"
                     >
                       {sentence.text}
                     </p>
                   ))}
-                  {sentences.length > 3 && (
-                    <p className="text-xs text-muted-foreground">
-                      +{sentences.length - 3} more sentences
-                    </p>
-                  )}
                 </div>
+
+                {/* Expand/Collapse button */}
+                {sentences.length > 3 && (
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="w-full text-xs"
+                    onClick={(e) => toggleCardExpansion(index, e)}
+                  >
+                    {isExpanded ? (
+                      <>
+                        <ChevronUp className="h-3 w-3 mr-1" />
+                        Show Less
+                      </>
+                    ) : (
+                      <>
+                        <ChevronDown className="h-3 w-3 mr-1" />
+                        Show All {sentences.length} Sentences
+                      </>
+                    )}
+                  </Button>
+                )}
 
                 {/* Word count */}
                 <div className="pt-2 border-t">
@@ -104,38 +136,28 @@ export function ScriptSelection({ scripts, onSelect }: ScriptSelectionProps) {
         })}
       </div>
 
-      {/* Action Buttons */}
-      <div className="flex justify-end gap-2 pt-4 border-t">
-        <Button
-          variant="outline"
-          onClick={() => toast.info('Scroll up to review all scripts')}
-        >
-          Need More Info
-        </Button>
-        <Button
-          onClick={handleConfirmSelection}
-          disabled={selectedIndex === null}
-          className="min-w-[150px]"
-        >
-          Continue with Selected Script
-        </Button>
-      </div>
-
       {/* Full script preview for selected one */}
       {selectedIndex !== null && scripts[selectedIndex] && (
-        <Card className="mt-6 border-primary">
+        <Card className="border-primary bg-primary/5">
           <CardHeader>
-            <CardTitle>Selected Script Preview</CardTitle>
-            <CardDescription>
-              Full script text for Script {selectedIndex + 1}
-            </CardDescription>
+            <div className="flex items-center justify-between">
+              <div>
+                <CardTitle className="flex items-center gap-2">
+                  <CheckCircle className="h-5 w-5 text-primary" />
+                  Selected Script Preview
+                </CardTitle>
+                <CardDescription>
+                  Full script text for Script {selectedIndex + 1} - Review before continuing
+                </CardDescription>
+              </div>
+            </div>
           </CardHeader>
           <CardContent>
-            <div className="space-y-4 max-h-96 overflow-y-auto">
+            <div className="space-y-3 max-h-[500px] overflow-y-auto pr-2">
               {scripts[selectedIndex].sentences.map((sentence, i) => (
-                <div key={i} className="p-3 rounded-lg bg-muted/30">
-                  <div className="flex items-start gap-2">
-                    <Badge variant="outline" className="text-xs shrink-0">
+                <div key={i} className="p-3 rounded-lg bg-background border">
+                  <div className="flex items-start gap-3">
+                    <Badge variant="secondary" className="text-xs shrink-0 mt-0.5">
                       {i + 1}
                     </Badge>
                     <p className="text-sm leading-relaxed">{sentence.text}</p>
@@ -143,9 +165,44 @@ export function ScriptSelection({ scripts, onSelect }: ScriptSelectionProps) {
                 </div>
               ))}
             </div>
+            <div className="mt-4 p-3 bg-muted/50 rounded-lg">
+              <div className="flex items-center justify-between text-sm">
+                <span className="text-muted-foreground">Total:</span>
+                <div className="flex gap-4">
+                  <span>{scripts[selectedIndex].sentences.length} sentences</span>
+                  <span>•</span>
+                  <span>{scripts[selectedIndex].script.split(' ').length} words</span>
+                  <span>•</span>
+                  <span>~{Math.round(scripts[selectedIndex].sentences.length * 6)} seconds</span>
+                </div>
+              </div>
+            </div>
           </CardContent>
         </Card>
       )}
+
+      {/* Action Buttons */}
+      <div className="flex justify-between items-center pt-4 border-t">
+        <Button
+          variant="ghost"
+          onClick={() => {
+            setSelectedIndex(null)
+            toast.info('Selection cleared - choose a different script')
+          }}
+          disabled={selectedIndex === null}
+        >
+          Clear Selection
+        </Button>
+        <Button
+          onClick={handleConfirmSelection}
+          disabled={selectedIndex === null}
+          size="lg"
+          className="min-w-[200px]"
+        >
+          <CheckCircle className="h-4 w-4 mr-2" />
+          Continue with Selected Script
+        </Button>
+      </div>
     </div>
   )
 }
