@@ -6,12 +6,8 @@ import ForgotPasswordPage from '@/pages/ForgotPasswordPage'
 import ResetPasswordPage from '@/pages/ResetPasswordPage'
 import DashboardPage from '@/pages/dashboard/DashboardPage'
 import PdfToVideoPage from '@/pages/dashboard/PdfToVideoPage'
-import ProjectsPage from '@/pages/dashboard/ProjectsPage'
-import AnalyticsPage from '@/pages/dashboard/AnalyticsPage'
 import ProfilePage from '@/pages/dashboard/ProfilePage'
-import SettingsPage from '@/pages/dashboard/SettingsPage'
 import { ProtectedRoute, PublicRoute } from '@/components/routes/ProtectedRoute'
-import PdfToVideoConvertPage from '@/pages/dashboard/PdfToVideoConvertPage'
 import ScriptGenerationPage from '@/pages/dashboard/ScriptGenerationPage'
 
 export function AppRoutes() {
@@ -77,34 +73,10 @@ export function AppRoutes() {
         }
       />
       <Route
-        path="/pdf-to-video/convert"
-        element={
-          <ProtectedRoute>
-            <PdfToVideoConvertPage />
-          </ProtectedRoute>
-        }
-      />
-      <Route
         path="/script-generation"
         element={
           <ProtectedRoute>
             <ScriptGenerationPage />
-          </ProtectedRoute>
-        }
-      />
-      <Route
-        path="/projects"
-        element={
-          <ProtectedRoute>
-            <ProjectsPage />
-          </ProtectedRoute>
-        }
-      />
-      <Route
-        path="/analytics"
-        element={
-          <ProtectedRoute>
-            <AnalyticsPage />
           </ProtectedRoute>
         }
       />
@@ -116,14 +88,14 @@ export function AppRoutes() {
           </ProtectedRoute>
         }
       />
-      <Route
+      {/* <Route
         path="/settings"
         element={
           <ProtectedRoute>
             <SettingsPage />
           </ProtectedRoute>
         }
-      />
+      /> */}
 
       {/* Default Routes */}
       <Route path="/" element={<Navigate to="/login" replace />} />

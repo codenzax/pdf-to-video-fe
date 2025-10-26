@@ -1,18 +1,13 @@
 import * as React from "react"
 import {
-  BookOpen,
   Bot,
-  Frame,
   GalleryVerticalEnd,
   FileText,
-  PieChart,
-  Settings2,
   SquareTerminal,
 } from "lucide-react"
 import { useAppSelector } from '@/store/hooks'
 
 import { NavMain } from "@/components/nav-main"
-import { NavProjects } from "@/components/nav-projects"
 import { NavUser } from "@/components/nav-user"
 import { TeamSwitcher } from "@/components/team-switcher"
 import {
@@ -43,20 +38,20 @@ const data = {
       title: "PDF TO VIDEO",
       url: "/pdf-to-video",
       icon: Bot,
-      items: [
-        {
-          title: "Convert File",
-          url: "/pdf-to-video/convert",
-        },
-        {
-          title: "Templates",
-          url: "/pdf-to-video/templates",
-        },
-        {
-          title: "History",
-          url: "/pdf-to-video/history",
-        },
-      ],
+      // items: [
+      //   {
+      //     title: "Convert File",
+      //     url: "/pdf-to-video/convert",
+      //   },
+      //   {
+      //     title: "Templates",
+      //     url: "/pdf-to-video/templates",
+      //   },
+      //   {
+      //     title: "History",
+      //     url: "/pdf-to-video/history",
+      //   },
+      // ],
     },
     {
       title: "Script Generation",
@@ -64,85 +59,85 @@ const data = {
       icon: FileText,
       isActive: false,
     },
-    {
-      title: "Projects",
-      url: "/projects",
-      icon: Frame,
-      items: [
-        {
-          title: "All Projects",
-          url: "/projects",
-        },
-        {
-          title: "Recent",
-          url: "/projects/recent",
-        },
-        {
-          title: "Favorites",
-          url: "/projects/favorites",
-        },
-      ],
-    },
-    {
-      title: "Analytics",
-      url: "/analytics",
-      icon: PieChart,
-      items: [
-        {
-          title: "Overview",
-          url: "/analytics",
-        },
-        {
-          title: "Video Performance",
-          url: "/analytics/videos",
-        },
-        {
-          title: "User Engagement",
-          url: "/analytics/engagement",
-        },
-      ],
-    },
-    {
-      title: "Settings",
-      url: "/settings",
-      icon: Settings2,
-      items: [
-        {
-          title: "General",
-          url: "/settings",
-        },
-        {
-          title: "Account",
-          url: "/settings/account",
-        },
-        {
-          title: "Billing",
-          url: "/settings/billing",
-        },
-        {
-          title: "API Keys",
-          url: "/settings/api",
-        },
-      ],
-    },
+    // {
+    //   title: "Projects",
+    //   url: "/projects",
+    //   icon: Frame,
+    //   items: [
+    //     {
+    //       title: "All Projects",
+    //       url: "/projects",
+    //     },
+    //     {
+    //       title: "Recent",
+    //       url: "/projects/recent",
+    //     },
+    //     {
+    //       title: "Favorites",
+    //       url: "/projects/favorites",
+    //     },
+    //   ],
+    // },
+    // {
+    //   title: "Analytics",
+    //   url: "/analytics",
+    //   icon: PieChart,
+    //   items: [
+    //     {
+    //       title: "Overview",
+    //       url: "/analytics",
+    //     },
+    //     {
+    //       title: "Video Performance",
+    //       url: "/analytics/videos",
+    //     },
+    //     {
+    //       title: "User Engagement",
+    //       url: "/analytics/engagement",
+    //     },
+    //   ],
+    // },
+    // {
+    //   title: "Settings",
+    //   url: "/settings",
+    //   icon: Settings2,
+    //   items: [
+    //     {
+    //       title: "General",
+    //       url: "/settings",
+    //     },
+    //     {
+    //       title: "Account",
+    //       url: "/settings/account",
+    //     },
+    //     {
+    //       title: "Billing",
+    //       url: "/settings/billing",
+    //     },
+    //     {
+    //       title: "API Keys",
+    //       url: "/settings/api",
+    //     },
+    //   ],
+    // },
   ],
-  projects: [
-    {
-      name: "Marketing Videos",
-      url: "/projects/marketing",
-      icon: PieChart,
-    },
-    {
-      name: "Educational Content",
-      url: "/projects/educational",
-      icon: BookOpen,
-    },
-    {
-      name: "Product Demos",
-      url: "/projects/demos",
-      icon: Frame,
-    },
-  ],
+  // projects: [
+  //   {
+  //     name: "Marketing Videos",
+  //     url: "/projects/marketing",
+  //     icon: PieChart,
+  //   },
+  //   {
+  //     name: "Educational Content",
+  //     url: "/projects/educational",
+  //     icon: BookOpen,
+  //   },
+  //   {
+  //     name: "Product Demos",
+  //     url: "/projects/demos",
+  //     icon: Frame,
+  //   },
+  // ],
 }
 
 export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
@@ -166,7 +161,7 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
       </SidebarHeader>
       <SidebarContent>
         <NavMain items={data.navMain} />
-        <NavProjects projects={data.projects} />
+        {/* <NavProjects projects={data.projects} /> */}
       </SidebarContent>
       <SidebarFooter>
         <NavUser user={userData} />
