@@ -26,19 +26,71 @@ export interface JsonData {
   }>
 }
 
+export interface SentenceVisual {
+  videoId?: string
+  videoUrl?: string
+  thumbnailUrl?: string
+  status: 'pending' | 'generating' | 'completed' | 'failed' | 'approved' | 'rejected'
+  approved: boolean
+  uploaded?: boolean // true if user uploaded custom video
+  mode?: 'gpt' | 'veo3' // Generation mode
+  imageUrl?: string // For GPT static mode - stores the background image (no text)
+  transitionType?: 'fade' | 'slide' | 'dissolve' | 'none' // Transition to next scene
+  // Subtitle settings (for GPT static mode - HTML overlay)
+  subtitleSettings?: {
+    yPosition: number // Y position in pixels (0-1080)
+    fontSize: number // Font size in pixels
+    zoom: number // Subtitle zoom level (0.5 - 2.0)
+  }
+}
+
+export interface SentenceAudio {
+  audioUrl?: string
+  audioBase64?: string
+  duration?: number
+  approved: boolean
+  isCustom: boolean // true if uploaded by user
+  voiceId?: string
+  status: 'pending' | 'generating' | 'completed' | 'failed' | 'approved' | 'rejected'
+}
+
+export interface BackgroundMusic {
+  audioUrl?: string
+  audioBase64?: string
+  duration?: number
+  prompt?: string
+  seed?: number
+  approved: boolean
+  isCustom: boolean // true if uploaded by user
+  license?: {
+    provider: 'stability' | 'custom'
+    licenseType?: string
+    attribution?: string
+    usageRights?: string
+  }
+  volume?: number // 0.0 - 1.0, default 0.3
+  trimStart?: number // Start time in seconds
+  trimEnd?: number // End time in seconds
+  status?: 'pending' | 'generating' | 'completed' | 'failed' | 'approved' | 'rejected'
+}
+
 export interface Sentence {
   id: string
   text: string
   approved: boolean
   startTime?: number
   endTime?: number
+  visual?: SentenceVisual
+  audio?: SentenceAudio
 }
 
 export interface ScriptData {
+  id?: string // Optional ID for tracking
   script: string
   sentences: Sentence[]
   version: number
   generatedAt: string
+  backgroundMusic?: BackgroundMusic // One background music for all sentences
 }
 
 export interface ExportData {

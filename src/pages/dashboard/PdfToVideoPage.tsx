@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { DashboardLayout } from "@/pages/Dashboard";
 import {
   Card,
@@ -23,6 +23,7 @@ import {
   RotateCcw,
   X,
   Home,
+  Video,
 } from "lucide-react";
 import { toast } from "sonner";
 import { grobidApi, CompleteExtractedData, LLMExtractionResponse } from '@/services/grobidApi';
@@ -37,24 +38,90 @@ interface ProcessingStep {
   description: string;
 }
 
-type WorkflowStep = 'upload' | 'extract' | 'preview' | 'script-selection' | 'script-editing';
+type WorkflowStep = 'upload' | 'extract' | 'preview' | 'script-selection' | 'script-editing' | 'video-generation';
+
+// SessionStorage key for persistence
+const PDF_TO_VIDEO_STORAGE_KEY = 'pdf_to_video_workflow_data';
+
+// Save workflow state to sessionStorage
+const saveWorkflowState = (data: {
+  currentStep: WorkflowStep;
+  selectedScript: ScriptData | null;
+  threeScripts: ScriptData[];
+  sessionId: string | null;
+}) => {
+  try {
+    const serialized = JSON.stringify(data);
+    const sizeInMB = new Blob([serialized]).size / (1024 * 1024);
+    
+    if (sizeInMB > 5) {
+      console.warn('⚠️ Workflow data is large:', sizeInMB.toFixed(2), 'MB');
+    }
+    
+    sessionStorage.setItem(PDF_TO_VIDEO_STORAGE_KEY, serialized);
+    console.log('💾 Saved workflow state:', {
+      step: data.currentStep,
+      scriptId: data.selectedScript?.id || 'default',
+      approvedVisuals: data.selectedScript?.sentences?.filter(s => s.visual?.approved).length || 0,
+      approvedAudio: data.selectedScript?.sentences?.filter(s => s.audio?.approved).length || 0,
+    });
+  } catch (e: any) {
+    console.error('❌ Failed to save workflow state:', e);
+    if (e.name === 'QuotaExceededError') {
+      console.error('SessionStorage quota exceeded! Data too large.');
+    }
+  }
+};
+
+// Load workflow state from sessionStorage
+const loadWorkflowState = () => {
+  try {
+    const saved = sessionStorage.getItem(PDF_TO_VIDEO_STORAGE_KEY);
+    if (saved) {
+      const parsed = JSON.parse(saved);
+      console.log('📂 Restored workflow state:', {
+        step: parsed.currentStep,
+        scriptId: parsed.selectedScript?.id,
+        approvedVisuals: parsed.selectedScript?.sentences?.filter((s: any) => s.visual?.approved).length || 0,
+        approvedAudio: parsed.selectedScript?.sentences?.filter((s: any) => s.audio?.approved).length || 0,
+      });
+      return parsed;
+    }
+  } catch (e) {
+    console.warn('Failed to load workflow state:', e);
+  }
+  return null;
+};
 
 export default function PdfToVideoPage() {
+  // Try to restore from sessionStorage on mount
+  const savedState = loadWorkflowState();
+  
   // Workflow state
-  const [currentStep, setCurrentStep] = useState<WorkflowStep>('upload');
+  const [currentStep, setCurrentStep] = useState<WorkflowStep>(savedState?.currentStep || 'upload');
 
   // PDF Upload & Extraction state
   const [isProcessing, setIsProcessing] = useState(false);
   const [processingSteps, setProcessingSteps] = useState<ProcessingStep[]>([]);
   const [uploadedFile, setUploadedFile] = useState<File | null>(null);
   const [extractedData, setExtractedData] = useState<CompleteExtractedData | null>(null);
-  const [sessionId, setSessionId] = useState<string | null>(null);
+  const [sessionId, setSessionId] = useState<string | null>(savedState?.sessionId || null);
   const [error, setError] = useState<string | null>(null);
 
   // Script Generation state
-  const [threeScripts, setThreeScripts] = useState<ScriptData[]>([]);
-  const [selectedScript, setSelectedScript] = useState<ScriptData | null>(null);
+  const [threeScripts, setThreeScripts] = useState<ScriptData[]>(savedState?.threeScripts || []);
+  const [selectedScript, setSelectedScript] = useState<ScriptData | null>(savedState?.selectedScript || null);
   const [isGeneratingScript, setIsGeneratingScript] = useState(false);
+
+  // Auto-save workflow state whenever it changes
+  useEffect(() => {
+    saveWorkflowState({
+      currentStep,
+      selectedScript,
+      threeScripts,
+      sessionId,
+    });
+  }, [currentStep, selectedScript, threeScripts, sessionId]);
 
   const steps: ProcessingStep[] = [
     {
@@ -281,10 +348,50 @@ export default function PdfToVideoPage() {
       sentence.id === sentenceId ? { ...sentence, approved: true } : sentence
     );
 
-    setSelectedScript({
+    const updatedScript = {
       ...selectedScript,
       sentences: updatedSentences
+    };
+
+    setSelectedScript(updatedScript);
+  };
+
+  const handleScriptUpdate = (updatedScript: ScriptData) => {
+    // Sync visual/audio updates back to parent state for persistence
+    const approvedVisualsCount = updatedScript.sentences.filter(
+      s => s.visual?.approved === true && (s.visual?.videoUrl || s.visual?.imageUrl)
+    ).length;
+    
+    console.log('🔄 handleScriptUpdate called:', {
+      totalSentences: updatedScript.sentences.length,
+      approvedVisuals: updatedScript.sentences.filter(s => s.visual?.approved === true).length,
+      approvedVisualsWithVideo: approvedVisualsCount,
+      approvedAudio: updatedScript.sentences.filter(s => s.audio?.approved === true).length,
+      scriptId: updatedScript.id || 'default',
     });
+    
+    // CRITICAL: Update state immediately - this will trigger re-render and pass updated prop to SimpleScriptEditor
+    setSelectedScript(updatedScript);
+    
+    // Log detailed approved visuals info
+    if (approvedVisualsCount > 0) {
+      console.log('✅ Approved visuals details:', updatedScript.sentences
+        .filter(s => s.visual?.approved === true && (s.visual?.videoUrl || s.visual?.imageUrl))
+        .map(s => ({
+          id: s.id.substring(0, 8),
+          approved: s.visual?.approved,
+          hasVideoUrl: !!s.visual?.videoUrl,
+          hasImageUrl: !!s.visual?.imageUrl,
+          videoUrl: s.visual?.videoUrl ? s.visual.videoUrl.substring(0, 50) + '...' : 'NO',
+          imageUrl: s.visual?.imageUrl ? s.visual.imageUrl.substring(0, 50) + '...' : 'NO',
+        }))
+      );
+    }
+    
+    // Auto-save will be triggered by useEffect
+    if (approvedVisualsCount > 0 && currentStep === 'script-editing') {
+      console.log('✅ Approved visuals detected:', approvedVisualsCount, '- VideoTimelineEditor should show them');
+    }
   };
 
   const handleExportScript = (data: ScriptData) => {
@@ -350,7 +457,7 @@ export default function PdfToVideoPage() {
   );
 
   const getStepStatus = (stepName: WorkflowStep): 'completed' | 'current' | 'pending' => {
-    const stepOrder: WorkflowStep[] = ['upload', 'extract', 'preview', 'script-selection', 'script-editing'];
+    const stepOrder: WorkflowStep[] = ['upload', 'extract', 'preview', 'script-selection', 'script-editing', 'video-generation'];
     const currentIndex = stepOrder.indexOf(currentStep);
     const stepIndex = stepOrder.indexOf(stepName);
 
@@ -366,7 +473,7 @@ export default function PdfToVideoPage() {
         <div className="space-y-2">
           <h1 className="text-3xl font-bold tracking-tight">PDF to Video Workflow</h1>
           <p className="text-muted-foreground">
-            Complete workflow: Upload PDF → Extract Data → Generate Script → Edit & Export
+            Complete workflow: Upload PDF → Extract Data → Generate Script → Edit Script → Generate Video → Export
           </p>
         </div>
 
@@ -384,6 +491,8 @@ export default function PdfToVideoPage() {
                 <StepIndicator step={4} label="Select Script" status={getStepStatus('script-selection')} />
                 <ArrowRight className="h-4 w-4 text-muted-foreground mx-2" />
                 <StepIndicator step={5} label="Edit Script" status={getStepStatus('script-editing')} />
+                <ArrowRight className="h-4 w-4 text-muted-foreground mx-2" />
+                <StepIndicator step={6} label="Generate Video" status={getStepStatus('video-generation')} />
               </div>
               {currentStep !== 'upload' && (
                 <Button
@@ -763,17 +872,70 @@ export default function PdfToVideoPage() {
                       Review, edit, and approve your final script
                     </CardDescription>
                   </div>
+                  <div className="flex gap-2">
                   <Button variant="outline" onClick={handleBackToSelection}>
                     ← Back to Selection
                   </Button>
+                    <Button 
+                      onClick={() => setCurrentStep('video-generation')}
+                      className="bg-green-600 hover:bg-green-700"
+                    >
+                      Next: Generate Videos
+                      <ArrowRight className="h-4 w-4 ml-2" />
+                    </Button>
+                  </div>
                 </div>
               </CardHeader>
             </Card>
             <SimpleScriptEditor
+              key={`editor-video-${selectedScript.id || 'default'}-${selectedScript.sentences.filter(s => s.visual?.approved === true).length}`}
               scriptData={selectedScript}
               onApprove={handleApproveSentence}
               onRegenerate={handleRegenerateScript}
               onExport={handleExportScript}
+              onScriptUpdate={handleScriptUpdate}
+              isLoading={isGeneratingScript}
+            />
+          </div>
+        )}
+
+        {/* STEP 6: Video Generation */}
+        {currentStep === 'video-generation' && selectedScript && (
+          <div className="space-y-4">
+            <Card>
+              <CardHeader>
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <Video className="h-5 w-5" />
+                    <div>
+                      <CardTitle>Step 6: Generate Videos</CardTitle>
+                      <CardDescription>
+                        Generate professional videos for each sentence in your script
+                      </CardDescription>
+                    </div>
+                  </div>
+                  <div className="flex gap-2">
+                    <Button variant="outline" onClick={() => setCurrentStep('script-editing')}>
+                      ← Back to Edit
+                    </Button>
+                    <Button 
+                      onClick={() => selectedScript && handleExportScript(selectedScript)}
+                      className="bg-blue-600 hover:bg-blue-700"
+                    >
+                      Export Final Video
+                      <ArrowRight className="h-4 w-4 ml-2" />
+                    </Button>
+                  </div>
+                </div>
+              </CardHeader>
+            </Card>
+            <SimpleScriptEditor
+              key={`editor-video-${selectedScript.id || 'default'}-${selectedScript.sentences.filter(s => s.visual?.approved === true).length}`}
+              scriptData={selectedScript}
+              onApprove={handleApproveSentence}
+              onRegenerate={handleRegenerateScript}
+              onExport={handleExportScript}
+              onScriptUpdate={handleScriptUpdate}
               isLoading={isGeneratingScript}
             />
           </div>
