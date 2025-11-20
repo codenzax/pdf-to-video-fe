@@ -28,7 +28,7 @@ class GPTStaticVideoService {
   constructor() {
     this.axiosInstance = axios.create({
       baseURL: `${normalizedBaseURL}/video`,
-      timeout: 120000, // 2 minutes
+      timeout: 600000, // 10 minutes to accommodate GPT + DALL-E + FFMPEG
       headers: {
         'Content-Type': 'application/json',
       },
@@ -147,7 +147,8 @@ class GPTStaticVideoService {
       researchDomain?: string;
     },
     zoomEffect: 'zoom-in' | 'zoom-out' | 'none' = 'none',
-    transitionType: 'fade' | 'slide' | 'dissolve' | 'none' = 'fade'
+    transitionType: 'fade' | 'slide' | 'dissolve' | 'none' = 'fade',
+    subtitleSettings?: { yPosition?: number; fontSize?: number }
   ): Promise<{
     imageUrl: string;
     videoUrl: string;
@@ -159,7 +160,7 @@ class GPTStaticVideoService {
 
       const response = await this.axiosInstance.post<StaticVideoResponse>(
         '/generate-static',
-        { sentence, duration, context, zoomEffect, transitionType }
+        { sentence, duration, context, zoomEffect, transitionType, subtitleSettings }
       );
 
       console.log('📦 GPT Static Response:', response.data);
@@ -178,9 +179,8 @@ class GPTStaticVideoService {
         throw new Error('Invalid response from GPT static video API');
       }
 
-      // Convert base64 to blob URL for video playback
-      const videoBlob = this.base64ToBlob(result.videoBase64, 'video/mp4');
-      const videoUrl = URL.createObjectURL(videoBlob);
+      // Prefer data URL so backend can consume base64 during assembly
+      const videoUrl = `data:video/mp4;base64,${result.videoBase64}`;
 
       console.log('✅ GPT static video generated:', {
         imageUrl: result.imageUrl,
@@ -208,17 +208,7 @@ class GPTStaticVideoService {
   /**
    * Convert base64 string to Blob
    */
-  private base64ToBlob(base64: string, mimeType: string): Blob {
-    const byteCharacters = atob(base64);
-    const byteNumbers = new Array(byteCharacters.length);
-    
-    for (let i = 0; i < byteCharacters.length; i++) {
-      byteNumbers[i] = byteCharacters.charCodeAt(i);
-    }
-    
-    const byteArray = new Uint8Array(byteNumbers);
-    return new Blob([byteArray], { type: mimeType });
-  }
+  // Removed unused function base64ToBlob
 }
 
 export const gptStaticVideoService = new GPTStaticVideoService();

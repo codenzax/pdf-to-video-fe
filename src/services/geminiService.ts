@@ -35,6 +35,8 @@ export interface SentenceVisual {
   uploaded?: boolean // true if user uploaded custom video
   mode?: 'gpt' | 'veo3' // Generation mode
   imageUrl?: string // For GPT static mode - stores the background image (no text)
+  videoBase64?: string // Base64 encoded video (for blob URL conversion)
+  imageBase64?: string // Base64 encoded image (for blob URL conversion)
   transitionType?: 'fade' | 'slide' | 'dissolve' | 'none' // Transition to next scene
   // Subtitle settings (for GPT static mode - HTML overlay)
   subtitleSettings?: {
@@ -84,6 +86,14 @@ export interface Sentence {
   audio?: SentenceAudio
 }
 
+export interface FinalVideo {
+  videoUrl?: string
+  videoBase64: string
+  duration: number
+  exportedAt?: string
+  isExported?: boolean
+}
+
 export interface ScriptData {
   id?: string // Optional ID for tracking
   script: string
@@ -91,6 +101,7 @@ export interface ScriptData {
   version: number
   generatedAt: string
   backgroundMusic?: BackgroundMusic // One background music for all sentences
+  finalVideo?: FinalVideo // Final assembled and exported video
 }
 
 export interface ExportData {

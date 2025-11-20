@@ -57,6 +57,8 @@ export function AudioGallery({
   const fileInputRef = useRef<HTMLInputElement>(null)
 
   // Initialize audio state if not present
+  // REMOVED: Auto-initialize audio - only update when user actually does something
+  // This prevents unnecessary database saves on every render
   useEffect(() => {
     if (!audio) {
       const newAudio: SentenceAudio = {
@@ -65,9 +67,9 @@ export function AudioGallery({
         status: 'pending',
       }
       setAudio(newAudio)
-      onAudioUpdate(sentence.id, newAudio)
+      // DON'T call onAudioUpdate here - only call when user generates/approves audio
     }
-  }, [sentence.id, audio, onAudioUpdate])
+  }, [sentence.id, audio])
 
   // Load available voices on mount
   useEffect(() => {
@@ -103,6 +105,7 @@ export function AudioGallery({
       const availableVoices = await elevenLabsService.getVoices()
       
       // If API returns voices, use them; otherwise keep default voices
+      // API may return empty array if permission missing, but voice generation still works
       if (availableVoices && availableVoices.length > 0) {
         setVoices(availableVoices)
         
@@ -259,7 +262,7 @@ export function AudioGallery({
     setAudio(approvedAudio)
     onAudioUpdate(sentence.id, approvedAudio)
     onApprove(sentence.id)
-    toast.success('Audio approved!')
+    toast.success('✅ Audio exported to Video Assembly!')
   }
 
   const handleReject = () => {
@@ -464,10 +467,10 @@ export function AudioGallery({
                   <Button
                     onClick={handleApprove}
                     disabled={audio.status !== 'completed'}
-                    className="flex-1"
+                    className="flex-1 min-w-[180px]"
                   >
                     <CheckCircle className="h-4 w-4 mr-2" />
-                    Approve
+                    Export to Video Assembly
                   </Button>
                   <Button
                     variant="outline"

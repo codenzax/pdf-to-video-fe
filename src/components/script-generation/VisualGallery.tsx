@@ -17,7 +17,9 @@ import {
 import { toast } from 'sonner'
 import { runwayService } from '@/services/runwayService'
 import { gptStaticVideoService } from '@/services/gptStaticVideoService'
-import { Sentence, SentenceVisual } from '@/services/geminiService'
+// Removed unused import
+// import { elevenLabsService } from '@/services/elevenLabsService'
+import { Sentence, SentenceVisual, SentenceAudio } from '@/services/geminiService'
 
 interface VisualGalleryProps {
   sentence: Sentence
@@ -25,6 +27,7 @@ interface VisualGalleryProps {
   onApprove: (sentenceId: string) => void
   onReject: (sentenceId: string) => void
   onVisualUpdate: (sentenceId: string, visual: SentenceVisual) => void
+  onAudioUpdate?: (sentenceId: string, audio: SentenceAudio) => void // Optional: for auto-generating audio
 }
 
 export function VisualGallery({
@@ -33,13 +36,11 @@ export function VisualGallery({
   onApprove,
   onReject,
   onVisualUpdate,
+  onAudioUpdate,
 }: VisualGalleryProps) {
-  // Initialize visual from sentence prop, but preserve approved status
+  // Initialize visual from sentence prop - sentence.visual is always the source of truth
   const [visual, setVisual] = useState<SentenceVisual | undefined>(() => {
-    // If sentence already has approved visual, use it
-    if (sentence.visual?.approved) {
-      return sentence.visual
-    }
+    // Always use sentence.visual if it exists
     return sentence.visual
   })
   const [isGenerating, setIsGenerating] = useState(false)
@@ -63,37 +64,49 @@ export function VisualGallery({
   )
   const fileInputRef = useRef<HTMLInputElement>(null)
 
-  // Sync visual from sentence prop, but NEVER overwrite approved visuals
+  // Sync visual from sentence prop - sentence.visual is the source of truth
   useEffect(() => {
-    // If sentence has approved visual, always sync it (but don't reset if already approved)
-    if (sentence.visual?.approved) {
-      if (!visual?.approved || visual !== sentence.visual) {
-        console.log('✅ Syncing approved visual from sentence:', sentence.id)
-        setVisual(sentence.visual)
+    // CRITICAL: Always sync from sentence.visual if it exists and is different
+    // This ensures that when gallery is hidden/shown, state is properly restored
+    if (sentence.visual) {
+      // If sentence has approved visual, ALWAYS sync it (source of truth)
+      if (sentence.visual.approved === true || sentence.visual.status === 'approved') {
+        // Only update if different to avoid infinite loops
+        if (!visual || visual.approved !== true || visual.videoUrl !== sentence.visual.videoUrl || visual.imageUrl !== sentence.visual.imageUrl) {
+          console.log('✅ Syncing approved visual from sentence (source of truth):', sentence.id, {
+            approved: sentence.visual.approved,
+            hasVideoUrl: !!sentence.visual.videoUrl,
+            hasImageUrl: !!sentence.visual.imageUrl,
+          })
+          setVisual(sentence.visual)
+        }
+        return
       }
-      return
-    }
-    
-    // Only initialize if no visual exists
-    if (!visual && !sentence.visual) {
+      
+      // If sentence has unapproved visual, sync it if we don't have one or if ours is also unapproved
+      if (!visual || (!visual.approved && visual !== sentence.visual)) {
+        // Only sync if different
+        if (JSON.stringify(visual) !== JSON.stringify(sentence.visual)) {
+          console.log('🔄 Syncing unapproved visual from sentence:', sentence.id)
+          setVisual(sentence.visual)
+        }
+      }
+      // If we have approved visual but sentence has unapproved, keep ours (don't overwrite approved)
+      else if (visual?.approved && !sentence.visual.approved) {
+        console.log('🔒 Preserving approved visual, sentence has unapproved:', sentence.id)
+        // Don't overwrite - keep approved state
+        return
+      }
+    } else if (!visual) {
+      // No visual in sentence and no local visual - initialize (but DON'T call onVisualUpdate to avoid unnecessary saves)
       const newVisual: SentenceVisual = {
         status: 'pending',
         approved: false,
       }
       setVisual(newVisual)
-      onVisualUpdate(sentence.id, newVisual)
+      // REMOVED: Don't call onVisualUpdate here - only call when user actually does something
     }
-    // If we have an approved visual, NEVER overwrite it with unapproved one
-    else if (visual?.approved && sentence.visual && !sentence.visual.approved) {
-      console.log('🔒 Preserving approved visual, ignoring unapproved update:', sentence.id)
-      // Keep our approved visual, don't overwrite
-      return
-    }
-    // If sentence has visual but we don't, sync it (only if not approved)
-    else if (!visual && sentence.visual && !sentence.visual.approved) {
-      setVisual(sentence.visual)
-    }
-  }, [sentence.id, sentence.visual, visual, onVisualUpdate])
+  }, [sentence.id, sentence.visual]) // Removed visual and onVisualUpdate from deps to avoid loops
 
   const handleGenerate = async () => {
     if (!sentence.text) {
@@ -145,7 +158,12 @@ export function VisualGallery({
           // paperTitle and researchDomain can be added later
         },
         'none', // No zoom during generation - user controls zoom after
-        transitionType
+        transitionType,
+        // Pass current subtitle settings so backend bakes them in
+        {
+          yPosition: subtitleYPosition,
+          fontSize: Math.round(subtitleFontSize * subtitleZoom),
+        }
       )
       
       toast.info('🎬 Step 3/3: Converting to video with FFMPEG...')
@@ -161,15 +179,19 @@ export function VisualGallery({
         imageUrl: result.imageUrl,
         videoUrl: result.videoUrl, // Actual 6-second MP4 video from FFMPEG
         thumbnailUrl: result.imageUrl,
-        approved: false,
+        approved: false, // Manual approval gate
         mode: 'gpt',
         transitionType: transitionType,
+        subtitleSettings: {
+          yPosition: subtitleYPosition,
+          fontSize: subtitleFontSize,
+          zoom: subtitleZoom,
+        },
       }
 
       setVisual(completedVisual)
       onVisualUpdate(sentence.id, completedVisual)
-
-      toast.success('✅ Video ready! Drag subtitle to reposition, adjust zoom controls.')
+      toast.success('✅ Video ready! Review and click Approve to send to Editor.')
     } catch (error: any) {
       // Enhanced error messages
       let errorMsg = 'Failed to generate static video';
@@ -213,13 +235,19 @@ export function VisualGallery({
           status: 'completed',
           videoUrl: (result as any).output[0],
           thumbnailUrl: (result as any).output[0],
-          approved: false,
+          approved: false, // Manual approval gate
+          mode: 'veo3',
+          transitionType: transitionType,
+          subtitleSettings: {
+            yPosition: subtitleYPosition,
+            fontSize: subtitleFontSize,
+            zoom: subtitleZoom,
+          },
         };
 
         setVisual(completedVisual);
         onVisualUpdate(sentence.id, completedVisual);
-
-        toast.success('Video generated successfully! Preview it below.');
+        toast.success('✅ Video generated! Review and click Approve to send to Editor.');
         return;
       }
 
@@ -269,15 +297,22 @@ export function VisualGallery({
         status: 'completed',
         videoUrl: videoUrls[0],
         thumbnailUrl: videoUrls[0],
-        approved: false,
+        approved: false, // Manual approval gate
         mode: 'veo3',
+        transitionType: transitionType,
+        subtitleSettings: {
+          yPosition: subtitleYPosition,
+          fontSize: subtitleFontSize,
+          zoom: subtitleZoom,
+        },
       }
 
       setVisual(completedVisual)
       onVisualUpdate(sentence.id, completedVisual)
-
-      toast.success('Cinematic video generated successfully! (VEO 3 Mode)')
+      toast.success('✅ Cinematic video generated! Review and click Approve to send to Editor.')
   }
+
+  // Removed unused function generateAudioAutomatically
 
   const handleRegenerate = async () => {
     // Regenerate simply calls the same generation logic
@@ -328,7 +363,7 @@ export function VisualGallery({
     }
   }
 
-  const handleApprove = () => {
+  const handleApprove = async () => {
     if (!visual) return
 
     // CRITICAL: Ensure we preserve ALL properties including videoUrl and imageUrl
@@ -342,14 +377,13 @@ export function VisualGallery({
       thumbnailUrl: visual.thumbnailUrl, // Preserve thumbnail
       mode: visual.mode, // Preserve mode
       transitionType: visual.transitionType || transitionType, // Preserve transition
-      // Save subtitle settings for GPT mode (for final export)
-      ...(visual.mode === 'gpt' && {
+      // CRITICAL: Always save subtitle settings (for all modes with subtitles)
+      // These are used for Canvas text overlay in final video
         subtitleSettings: {
           yPosition: subtitleYPosition,
           fontSize: subtitleFontSize,
           zoom: subtitleZoom,
         }
-      })
     }
 
     console.log('✅ Video approved - FULL STATE:', {
@@ -370,9 +404,48 @@ export function VisualGallery({
     onVisualUpdate(sentence.id, approvedVisual)
     
     onApprove(sentence.id)
+    
+    // AUTO-GENERATE AUDIO when video is approved
+    if (onAudioUpdate && sentence.text && !sentence.audio?.audioUrl && !sentence.audio?.audioBase64) {
+      console.log('🎵 Auto-generating audio for approved video...', sentence.id)
+      toast.info('🎵 Auto-generating audio narration for this video...')
+      
+      try {
+        // Import elevenLabsService for audio generation
+        const { elevenLabsService } = await import('@/services/elevenLabsService')
+        
+        // Generate audio automatically
+        const result = await elevenLabsService.generateAudio({
+          text: sentence.text,
+          sentenceId: sentence.id,
+          voiceId: '21m00Tcm4TlvDq8ikWAM', // Default: Rachel - professional female voice
+        })
+
+        const autoGeneratedAudio: SentenceAudio = {
+          ...result,
+          approved: true, // AUTO-APPROVE audio when video is approved
+          status: 'approved',
+          isCustom: false,
+        }
+
+        console.log('✅ Auto-generated and auto-approved audio:', {
+          sentenceId: sentence.id,
+          hasAudioUrl: !!autoGeneratedAudio.audioUrl,
+          hasAudioBase64: !!autoGeneratedAudio.audioBase64,
+        })
+
+        // Attach audio to sentence
+        onAudioUpdate(sentence.id, autoGeneratedAudio)
+        toast.success('✅ Audio auto-generated and auto-approved! Ready for assembly.')
+      } catch (error) {
+        console.error('❌ Auto-audio generation failed:', error)
+        toast.error('Failed to auto-generate audio. You can generate it manually.')
+      }
+    }
+    
     toast.success(visual.mode === 'gpt' 
-      ? `Video approved! Ready for assembly. Subtitle settings saved (Position: ${Math.round(subtitleYPosition)}px, Size: ${Math.round(subtitleZoom * 100)}%)` 
-      : 'Video approved! Ready for assembly.')
+      ? `✅ Video approved and exported to Video Assembly! Subtitle settings saved (Position: ${Math.round(subtitleYPosition)}px, Size: ${Math.round(subtitleZoom * 100)}%)` 
+      : '✅ Video approved and exported to Video Assembly!')
   }
 
   const handleReject = () => {
@@ -453,8 +526,8 @@ export function VisualGallery({
                 Your browser does not support the video tag.
               </video>
 
-              {/* HTML Subtitle Overlay (zoomable) - Only for GPT mode */}
-              {visual.mode === 'gpt' && (
+              {/* HTML Subtitle Overlay disabled (subtitles are baked in video) */}
+              {false && visual?.mode === 'gpt' && (
                 <div
                   className="absolute left-0 right-0 pointer-events-none"
                   style={{
@@ -794,10 +867,10 @@ export function VisualGallery({
               <Button
                 onClick={handleApprove}
                 variant="default"
-                className="flex-1 min-w-[100px] bg-green-600 hover:bg-green-700"
+                className="flex-1 min-w-[180px] bg-green-600 hover:bg-green-700"
               >
                 <CheckCircle className="h-4 w-4 mr-2" />
-                Accept
+                Export to Video Assembly
               </Button>
               <Button
                 onClick={handleReject}

@@ -8,6 +8,12 @@ const normalizedBaseURL = API_BASE_URL.endsWith('/api/v1')
   ? API_BASE_URL
   : `${API_BASE_URL}/api/v1`;
 
+export interface SubtitleSettings {
+  yPosition: number;
+  fontSize: number;
+  zoom: number;
+}
+
 export interface VideoSegment {
   sentenceId: string;
   videoUrl: string;
@@ -15,7 +21,10 @@ export interface VideoSegment {
   audioUrl?: string;
   audioBase64?: string;
   duration: number;
+  startTime?: number; // Crop start time in seconds
+  endTime?: number; // Crop end time in seconds
   transitionType?: 'fade' | 'slide' | 'dissolve' | 'none';
+  subtitleSettings?: SubtitleSettings; // For Canvas text/subtitles overlay
 }
 
 export interface AssemblyRequest {
@@ -175,12 +184,30 @@ class VideoAssemblyService {
       return response.data.data;
     } catch (error: any) {
       console.error('❌ Video assembly error:', error);
+      console.error('Error details:', {
+        status: error.response?.status,
+        statusText: error.response?.statusText,
+        data: error.response?.data,
+        message: error.message,
+      });
 
+      // Extract detailed error message
+      let errorMessage = 'Failed to assemble video';
+      
       if (error.response?.data?.message) {
-        throw new Error(error.response.data.message);
+        errorMessage = error.response.data.message;
+      } else if (error.response?.data?.error) {
+        errorMessage = error.response.data.error;
+      } else if (error.message) {
+        errorMessage = error.message;
+      }
+      
+      // Add status code if available
+      if (error.response?.status) {
+        errorMessage = `[${error.response.status}] ${errorMessage}`;
       }
 
-      throw new Error(error.message || 'Failed to assemble video');
+      throw new Error(errorMessage);
     }
   }
 

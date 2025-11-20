@@ -46,7 +46,7 @@ class RunwayService {
   constructor() {
     this.axiosInstance = axios.create({
       baseURL: `${normalizedBaseURL}/video`,
-      timeout: 120000, // 2 minutes
+      timeout: 600000, // 10 minutes to avoid generation timeouts
       headers: {
         'Content-Type': 'application/json',
       },
