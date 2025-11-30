@@ -140,58 +140,133 @@ class GeminiService {
 
   private splitIntoSentences(text: string): Sentence[] {
     // Split into proper sentences first
-    const sentences = text
+    let sentences = text
       .split(/(?<=[.!?])\s+(?=[A-Z])/) // Split on sentence boundaries but keep punctuation
       .map(s => s.trim())
       .filter(s => s.length > 20) // Filter out very short fragments
     
+    // If no sentences found with standard splitting, try alternative methods
+    if (sentences.length === 0) {
+      // Try splitting by periods, exclamation marks, and question marks
+      sentences = text
+        .split(/[.!?]+\s*/)
+        .map(s => s.trim())
+        .filter(s => s.length > 20)
+    }
+    
+    // If still no sentences, split by words as last resort
+    if (sentences.length === 0) {
+      const words = text.split(/\s+/).filter(w => w.length > 0)
+      if (words.length > 0) {
+        const wordsPerSentence = Math.ceil(words.length / 15)
+        sentences = []
+        for (let i = 0; i < 15 && i * wordsPerSentence < words.length; i++) {
+          const start = i * wordsPerSentence
+          const end = Math.min(start + wordsPerSentence, words.length)
+          const sentence = words.slice(start, end).join(' ')
+          if (sentence.length > 0) {
+            sentences.push(sentence + (i < 14 ? '.' : ''))
+          }
+        }
+      }
+    }
+
     // Always ensure we have exactly 15 sentences
     const targetSentences = 15
     const finalSentences: string[] = []
     
     if (sentences.length >= targetSentences) {
-      // If we have 15 or more sentences, take the first 15
-      finalSentences.push(...sentences.slice(0, targetSentences))
+      // If we have 15 or more sentences, take the first 15 unique ones
+      const seen = new Set<string>()
+      for (const sentence of sentences) {
+        const normalized = sentence.toLowerCase().trim()
+        if (!seen.has(normalized) && finalSentences.length < targetSentences) {
+          seen.add(normalized)
+          finalSentences.push(sentence)
+        }
+        if (finalSentences.length >= targetSentences) break
+      }
     } else if (sentences.length > 0) {
-      // If we have fewer than 15 sentences, distribute them evenly
-      const sentencesPerGroup = Math.ceil(sentences.length / targetSentences)
+      // If we have fewer than 15 sentences, distribute content more intelligently
+      // Try to split longer sentences or combine shorter ones to reach 15
+      const totalWords = sentences.join(' ').split(/\s+/).length
+      const targetWordsPerSentence = Math.ceil(totalWords / targetSentences)
       
-      for (let i = 0; i < targetSentences; i++) {
-        const startIndex = i * sentencesPerGroup
-        const endIndex = Math.min(startIndex + sentencesPerGroup, sentences.length)
+      let wordIndex = 0
+      const allWords = sentences.join(' ').split(/\s+/)
+      
+      for (let i = 0; i < targetSentences && wordIndex < allWords.length; i++) {
+        const wordsForThisSentence: string[] = []
+        const targetWords = i === targetSentences - 1 
+          ? allWords.length - wordIndex // Last sentence gets remaining words
+          : targetWordsPerSentence
         
-        if (startIndex < sentences.length) {
-          const combinedSentence = sentences.slice(startIndex, endIndex).join(' ')
-          finalSentences.push(combinedSentence)
-        } else {
-          // If we run out of sentences, repeat the last one or create a continuation
-          const lastSentence = sentences[sentences.length - 1]
-          finalSentences.push(lastSentence)
+        for (let j = 0; j < targetWords && wordIndex < allWords.length; j++) {
+          wordsForThisSentence.push(allWords[wordIndex])
+          wordIndex++
+        }
+        
+        if (wordsForThisSentence.length > 0) {
+          const sentence = wordsForThisSentence.join(' ')
+          // Only add if it's unique
+          const normalized = sentence.toLowerCase().trim()
+          if (!finalSentences.some(s => s.toLowerCase().trim() === normalized)) {
+            finalSentences.push(sentence + (i < targetSentences - 1 ? '.' : ''))
+          }
         }
       }
-    } else {
-      // Fallback: if no sentences found, split by words
-      const words = text.split(' ')
-      const wordsPerSentence = Math.ceil(words.length / targetSentences)
+    }
+
+    // If we still don't have 15 unique sentences, we need to handle this case
+    // This should rarely happen if the AI generates proper content, but we need a fallback
+    if (finalSentences.length < targetSentences) {
+      console.warn(`Warning: Only ${finalSentences.length} unique sentences found. Expected ${targetSentences}.`)
+      // Try to split the last few sentences more granularly to create more content
+      if (finalSentences.length > 0) {
+        const lastSentence = finalSentences[finalSentences.length - 1]
+        const words = lastSentence.split(/\s+/)
+        if (words.length > 10) {
+          // Split the last sentence into smaller parts
+          const wordsPerPart = Math.ceil(words.length / (targetSentences - finalSentences.length + 1))
+          for (let i = 0; i < words.length && finalSentences.length < targetSentences; i += wordsPerPart) {
+            const part = words.slice(i, i + wordsPerPart).join(' ')
+            if (part.trim().length > 0) {
+              const normalized = part.toLowerCase().trim()
+              if (!finalSentences.some(s => s.toLowerCase().trim() === normalized)) {
+                finalSentences.push(part + '.')
+              }
+            }
+          }
+        }
+      }
       
-      for (let i = 0; i < targetSentences; i++) {
-        const start = i * wordsPerSentence
-        const end = Math.min(start + wordsPerSentence, words.length)
-        if (start < words.length) {
-          const sentenceWords = words.slice(start, end)
-          finalSentences.push(sentenceWords.join(' ') + (i === targetSentences - 1 ? '' : '.'))
-        }
+      // Final fallback: add numbered placeholders only if absolutely necessary
+      while (finalSentences.length < targetSentences) {
+        const placeholder = `[Content segment ${finalSentences.length + 1} - requires regeneration]`
+        finalSentences.push(placeholder)
       }
     }
 
-    // Ensure we always have exactly 15 sentences
-    while (finalSentences.length < targetSentences) {
-      finalSentences.push(finalSentences[finalSentences.length - 1] || 'Additional content needed.')
+    // Final validation: ensure all sentences are unique
+    const uniqueSentences: string[] = []
+    const seenNormalized = new Set<string>()
+    
+    for (const sentence of finalSentences.slice(0, targetSentences)) {
+      const normalized = sentence.toLowerCase().trim()
+      if (!seenNormalized.has(normalized)) {
+        seenNormalized.add(normalized)
+        uniqueSentences.push(sentence)
+      }
+    }
+    
+    // If we lost sentences due to duplicates, pad with numbered placeholders
+    while (uniqueSentences.length < targetSentences) {
+      uniqueSentences.push(`Additional content segment ${uniqueSentences.length + 1}.`)
     }
 
-    return finalSentences.slice(0, targetSentences).map((text, index) => ({
+    return uniqueSentences.slice(0, targetSentences).map((text, index) => ({
       id: this.generateSentenceId(index),
-      text: text,
+      text: text.trim(),
       approved: false,
       startTime: index * 6, // 6 seconds per sentence for 90 seconds total
       endTime: (index + 1) * 6
@@ -225,6 +300,7 @@ Your job is to analyze this JSON and produce THREE DIFFERENT, distinct variation
 • Uses precise terminology and findings that showcase the study's contributions
 • STRUCTURE: Must have a strong opening hook, progressive body development, and impactful closing
 • NARRATIVE ARC: Build from problem identification through methodology to results and implications
+• CRITICAL: Each of the 15 sentences must be UNIQUE and DISTINCT - never repeat the same sentence or similar phrasing
 
 🎯 Script Guidelines
 • Opening (5–10 sec): Introduce topic using the title and mention the authors' names. Set the context for the research.
@@ -234,11 +310,15 @@ Your job is to analyze this JSON and produce THREE DIFFERENT, distinct variation
 Paper Data:
 ${JSON.stringify(jsonData, null, 2)}
 
-CRITICAL: Generate THREE DISTINCTLY DIFFERENT script variations. Each script should:
-1. Have a different opening approach/hook
-2. Emphasize different aspects of the research
-3. Use varied narrative styles
-4. Present information in different orders/structures
+CRITICAL REQUIREMENTS:
+1. Generate EXACTLY 15 UNIQUE sentences - each sentence must be completely different from all others
+2. Never repeat the same sentence, even with slight variations
+3. Each sentence should cover different aspects, findings, or implications from the research
+4. Generate THREE DISTINCTLY DIFFERENT script variations. Each script should:
+   - Have a different opening approach/hook
+   - Emphasize different aspects of the research
+   - Use varied narrative styles
+   - Present information in different orders/structures
 
 Format your response EXACTLY as follows (no other text):
 
@@ -326,6 +406,7 @@ Your job is to analyze this JSON and produce a refined, engaging 90-second narra
 • Uses precise terminology and findings that showcase the study's contributions
 • STRUCTURE: Must have a strong opening hook, progressive body development, and impactful closing
 • NARRATIVE ARC: Build from problem identification through methodology to results and implications
+• CRITICAL: Each of the 15 sentences must be UNIQUE and DISTINCT - never repeat the same sentence or similar phrasing
 
 🎯 Script Guidelines
 • Opening (5–10 sec): Introduce topic using the title and mention the authors' names. Set the context for the research.
@@ -334,6 +415,8 @@ Your job is to analyze this JSON and produce a refined, engaging 90-second narra
 
 Paper Data:
 ${JSON.stringify(jsonData, null, 2)}
+
+CRITICAL: Generate EXACTLY 15 UNIQUE sentences. Each sentence must be completely different - never repeat the same sentence or similar phrasing. Each sentence should cover different aspects, findings, or implications from the research.
 
 Generate only the script text, no additional commentary or formatting.`
 
@@ -400,6 +483,7 @@ Your job is to analyze this JSON and produce a refined, engaging 90-second narra
 • Uses precise terminology and findings that showcase the study's contributions
 • STRUCTURE: Must have a strong opening hook, progressive body development, and impactful closing
 • NARRATIVE ARC: Build from problem identification through methodology to results and implications
+• CRITICAL: Each of the 15 sentences must be UNIQUE and DISTINCT - never repeat the same sentence or similar phrasing
 
 🎯 Script Guidelines
 • Opening (3 sentences): Create a compelling hook that introduces the research problem, establishes the authors' credibility, and sets up why this study matters. Use specific details that immediately capture attention.
@@ -409,6 +493,8 @@ Your job is to analyze this JSON and produce a refined, engaging 90-second narra
   - Sentence 15: Create a powerful conclusion that explains why this research matters and motivates readers to explore the full study
 
 CRITICAL REQUIREMENTS:
+• Generate EXACTLY 15 UNIQUE sentences - each sentence must be completely different from all others
+• Never repeat the same sentence, even with slight variations - each sentence should cover different aspects, findings, or implications
 • Every sentence must contain specific data, findings, or insights from the research
 • Use exact statistics, percentages, sample sizes, and methodological details
 • Include specific examples, case studies, or results mentioned in the research
@@ -510,6 +596,7 @@ Your job is to analyze this JSON and produce a refined, engaging 90-second narra
 • Uses precise terminology and findings that showcase the study's contributions
 • STRUCTURE: Must have a strong opening hook, progressive body development, and impactful closing
 • NARRATIVE ARC: Build from problem identification through methodology to results and implications
+• CRITICAL: Each of the 15 sentences must be UNIQUE and DISTINCT - never repeat the same sentence or similar phrasing
 
 🎯 Script Guidelines
 • Opening (5–10 sec): Introduce topic using the title and mention the authors' names. Set the context for the research.
@@ -523,6 +610,8 @@ ${currentScript ? `Previous Script (for reference):
 ${currentScript}
 
 Please generate a different version while maintaining the same quality and structure.` : ''}
+
+CRITICAL: Generate EXACTLY 15 UNIQUE sentences. Each sentence must be completely different - never repeat the same sentence or similar phrasing. Each sentence should cover different aspects, findings, or implications from the research.
 
 Generate only the script text, no additional commentary or formatting.`
 

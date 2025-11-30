@@ -37,6 +37,7 @@ export function AudioGallery({
   const [isPlaying, setIsPlaying] = useState(false)
   const [currentTime, setCurrentTime] = useState(0)
   const [duration, setDuration] = useState(0)
+  const [errorMessage, setErrorMessage] = useState<string | null>(null)
   // Popular ElevenLabs voices as fallback
   const defaultVoices: Voice[] = [
     { voice_id: '21m00Tcm4TlvDq8ikWAM', name: 'Rachel', category: 'Professional Female', description: 'Clear, professional female voice' },
@@ -139,6 +140,7 @@ export function AudioGallery({
     }
 
     setIsGenerating(true)
+    setErrorMessage(null) // Clear previous error
     setAudio((prev) =>
       prev ? { ...prev, status: 'generating' } : { status: 'generating', approved: false, isCustom: false }
     )
@@ -161,12 +163,14 @@ export function AudioGallery({
       }
 
       setAudio(newAudio)
+      setErrorMessage(null) // Clear any previous errors
       onAudioUpdate(sentence.id, newAudio)
       toast.success('Audio generated successfully!')
     } catch (error) {
       console.error('Error generating audio:', error)
-      const errorMessage = error instanceof Error ? error.message : 'Failed to generate audio'
-      toast.error(errorMessage, { duration: 5000 })
+      const errorMsg = error instanceof Error ? error.message : 'Failed to generate audio'
+      setErrorMessage(errorMsg)
+      toast.error(errorMsg, { duration: 8000 })
       
       setAudio((prev) =>
         prev
@@ -213,6 +217,7 @@ export function AudioGallery({
       }
 
       setAudio(newAudio)
+      setErrorMessage(null) // Clear any previous errors
       onAudioUpdate(sentence.id, newAudio)
       toast.success('Audio uploaded successfully!')
     } catch (error) {
@@ -511,12 +516,17 @@ export function AudioGallery({
         </div>
 
         {/* Error Message */}
-        {audio?.status === 'failed' && (
-          <div className="flex items-center gap-2 p-3 bg-destructive/10 border border-destructive/20 rounded-lg">
-            <AlertCircle className="h-4 w-4 text-destructive" />
-            <p className="text-sm text-destructive">
-              Audio generation failed. Please try again.
-            </p>
+        {audio?.status === 'failed' && errorMessage && (
+          <div className="flex items-start gap-2 p-3 bg-destructive/10 border border-destructive/20 rounded-lg">
+            <AlertCircle className="h-4 w-4 text-destructive mt-0.5 shrink-0" />
+            <div className="flex-1">
+              <p className="text-sm font-medium text-destructive mb-1">
+                Audio generation failed
+              </p>
+              <p className="text-sm text-destructive/90">
+                {errorMessage}
+              </p>
+            </div>
           </div>
         )}
       </CardContent>
