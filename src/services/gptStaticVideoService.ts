@@ -148,7 +148,9 @@ class GPTStaticVideoService {
     },
     zoomEffect: 'zoom-in' | 'zoom-out' | 'none' = 'none',
     transitionType: 'fade' | 'slide' | 'dissolve' | 'none' = 'fade',
-    subtitleSettings?: { yPosition?: number; fontSize?: number }
+    subtitleSettings?: { yPosition?: number; fontSize?: number },
+    tables?: Array<{ title: string; data: string }>,
+    images?: Array<{ title: string; description: string }>
   ): Promise<{
     imageUrl: string;
     videoUrl: string;
@@ -160,7 +162,7 @@ class GPTStaticVideoService {
 
       const response = await this.axiosInstance.post<StaticVideoResponse>(
         '/generate-static',
-        { sentence, duration, context, zoomEffect, transitionType, subtitleSettings }
+        { sentence, duration, context, zoomEffect, transitionType, subtitleSettings, tables, images }
       );
 
       console.log('📦 GPT Static Response:', response.data);

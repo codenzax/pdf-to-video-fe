@@ -895,6 +895,8 @@ export default function PdfToVideoPage() {
               onExport={handleExportScript}
               onScriptUpdate={handleScriptUpdate}
               isLoading={isGeneratingScript}
+              tables={extractedData?.tables.map(t => ({ title: t.title, data: t.data }))}
+              images={extractedData?.images.map(i => ({ title: i.title, description: i.description }))}
             />
           </div>
         )}
@@ -937,6 +939,8 @@ export default function PdfToVideoPage() {
               onExport={handleExportScript}
               onScriptUpdate={handleScriptUpdate}
               isLoading={isGeneratingScript}
+              tables={extractedData?.tables.map(t => ({ title: t.title, data: t.data }))}
+              images={extractedData?.images.map(i => ({ title: i.title, description: i.description }))}
             />
           </div>
         )}

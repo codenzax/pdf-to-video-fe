@@ -28,6 +28,8 @@ interface VisualGalleryProps {
   onReject: (sentenceId: string) => void
   onVisualUpdate: (sentenceId: string, visual: SentenceVisual) => void
   onAudioUpdate?: (sentenceId: string, audio: SentenceAudio) => void // Optional: for auto-generating audio
+  tables?: Array<{ title: string; data: string }> // Tables data for contextual image enhancement
+  images?: Array<{ title: string; description: string }> // Images/figures data for contextual image enhancement
 }
 
 export function VisualGallery({
@@ -37,6 +39,8 @@ export function VisualGallery({
   onReject,
   onVisualUpdate,
   onAudioUpdate,
+  tables,
+  images,
 }: VisualGalleryProps) {
   // Initialize visual from sentence prop - sentence.visual is always the source of truth
   const [visual, setVisual] = useState<SentenceVisual | undefined>(() => {
@@ -163,7 +167,10 @@ export function VisualGallery({
         {
           yPosition: subtitleYPosition,
           fontSize: Math.round(subtitleFontSize * subtitleZoom),
-        }
+        },
+        // Pass tables and images for contextual prompt enhancement
+        tables,
+        images
       )
       
       toast.info('🎬 Step 3/3: Converting to video with FFMPEG...')

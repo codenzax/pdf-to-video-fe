@@ -45,6 +45,8 @@ interface SimpleScriptEditorProps {
   onScriptUpdate?: (data: ScriptData) => void // Callback to sync state back to parent
   isLoading?: boolean
   paperContext?: string // Paper title, authors, etc. for video generation context
+  tables?: Array<{ title: string; data: string }> // Tables data for contextual image enhancement
+  images?: Array<{ title: string; description: string }> // Images/figures data for contextual image enhancement
 }
 
 export function SimpleScriptEditor({ 
@@ -54,7 +56,9 @@ export function SimpleScriptEditor({
   onExport,
   onScriptUpdate,
   isLoading = false,
-  paperContext 
+  paperContext,
+  tables,
+  images
 }: SimpleScriptEditorProps) {
   const [selectedSentenceId, setSelectedSentenceId] = useState<string | null>(null)
   const [isPlaying, setIsPlaying] = useState(false)
@@ -798,6 +802,8 @@ export function SimpleScriptEditor({
               onReject={handleVisualReject}
               onVisualUpdate={handleVisualUpdate}
               onAudioUpdate={handleAudioUpdate}
+              tables={tables}
+              images={images}
             />
           ))}
         </CardContent>
