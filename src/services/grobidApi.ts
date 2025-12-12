@@ -32,9 +32,17 @@ export interface TableData {
 }
 
 export interface ImageData {
-  title: string;
+  id?: string;
+  title?: string;
+  caption?: string;
   description: string;
-  path: string;
+  path?: string;
+  filename?: string;
+  category?: 'methodology' | 'results';
+  type?: string;
+  page?: number;
+  data_points?: string[];
+  key_insights?: string[];
 }
 
 export interface CompleteExtractedData {
@@ -72,7 +80,16 @@ class GrobidApiService {
   private baseURL: string;
 
   constructor() {
-    this.baseURL = API_BASE_URL;
+    // Normalize baseURL to ensure it ends with /api/v1
+    // Remove trailing slashes first, then add /api/v1
+    let base = API_BASE_URL.trim().replace(/\/+$/, ''); // Remove trailing slashes
+    if (!base.endsWith('/api/v1')) {
+      base = `${base}/api/v1`;
+    }
+    this.baseURL = base;
+    
+    // Debug logging (remove in production if needed)
+    console.log('🔧 GrobidApiService initialized with baseURL:', this.baseURL);
   }
 
   /**
@@ -90,7 +107,10 @@ class GrobidApiService {
     const formData = new FormData();
     formData.append('pdf', file);
 
-    const response = await axios.post(`${this.baseURL}/pdf/extract-complete`, formData, {
+    const url = `${this.baseURL}/pdf/extract-complete`;
+    console.log('📤 Calling extract-complete endpoint:', url);
+    
+    const response = await axios.post(url, formData, {
       headers: {
         'Content-Type': 'multipart/form-data',
       },

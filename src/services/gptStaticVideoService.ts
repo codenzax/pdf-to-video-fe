@@ -148,7 +148,9 @@ class GPTStaticVideoService {
     },
     zoomEffect: 'zoom-in' | 'zoom-out' | 'none' = 'none',
     transitionType: 'fade' | 'slide' | 'dissolve' | 'none' = 'fade',
-    subtitleSettings?: { yPosition?: number; fontSize?: number },
+    subtitleSettings?: { yPosition?: number; fontSize?: number; zoom?: number },
+    subtitleText?: string, // Custom subtitle text (editable by user)
+    customPrompt?: string, // Custom image/video generation prompt (editable by user)
     tables?: Array<{ title: string; data: string }>,
     images?: Array<{ title: string; description: string }>
   ): Promise<{
@@ -158,11 +160,11 @@ class GPTStaticVideoService {
     duration: number;
   }> {
     try {
-      console.log('🎨 Generating static video with GPT...', { sentence });
+      console.log('🎨 Generating static video with GPT...', { sentence, hasCustomPrompt: !!customPrompt, hasSubtitleText: !!subtitleText });
 
       const response = await this.axiosInstance.post<StaticVideoResponse>(
         '/generate-static',
-        { sentence, duration, context, zoomEffect, transitionType, subtitleSettings, tables, images }
+        { sentence, duration, context, zoomEffect, transitionType, subtitleSettings, subtitleText, customPrompt, tables, images }
       );
 
       console.log('📦 GPT Static Response:', response.data);
@@ -204,6 +206,67 @@ class GPTStaticVideoService {
       }
 
       throw new Error(error.message || 'Failed to generate static video');
+    }
+  }
+
+  /**
+   * Generate prompt only (preview before generation)
+   * This method calls the backend to generate a prompt without generating the image/video
+   */
+  async generatePrompt(params: {
+    sentenceText: string;
+    context?: string | {
+      fullScript?: string;
+      paperTitle?: string;
+      researchDomain?: string;
+    };
+    customPrompt?: string;
+    tables?: Array<{ title: string; data: string }>;
+    images?: Array<{ title: string; description: string }>;
+  }): Promise<string> {
+    try {
+      const {
+        sentenceText,
+        context,
+        customPrompt,
+        tables,
+        images,
+      } = params;
+
+      // Convert context string to object if needed
+      let contextObj: { fullScript?: string; paperTitle?: string; researchDomain?: string } | undefined;
+      if (typeof context === 'string') {
+        contextObj = { fullScript: context };
+      } else {
+        contextObj = context;
+      }
+
+      console.log('🔍 Generating prompt preview...', { sentence: sentenceText, hasCustomPrompt: !!customPrompt });
+
+      const response = await this.axiosInstance.post<{ success: boolean; data: { prompt: string } }>(
+        '/generate-prompt',
+        { 
+          sentence: sentenceText, 
+          context: contextObj, 
+          customPrompt,
+          tables, 
+          images 
+        }
+      );
+
+      if (response.data.data?.prompt) {
+        return response.data.data.prompt;
+      }
+
+      throw new Error('Invalid response from prompt generation API');
+    } catch (error: any) {
+      console.error('❌ Prompt generation error:', error);
+
+      if (error.response?.data?.message) {
+        throw new Error(error.response.data.message);
+      }
+
+      throw new Error(error.message || 'Failed to generate prompt');
     }
   }
 

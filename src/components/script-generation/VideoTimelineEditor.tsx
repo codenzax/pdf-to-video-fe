@@ -1450,6 +1450,9 @@ export function VideoTimelineEditor({
                                     thumbnailUrl: currentVisual.thumbnailUrl || sentence.visual?.thumbnailUrl,
                                     transitionType: currentVisual.transitionType || sentence.visual?.transitionType,
                                     subtitleSettings: currentVisual.subtitleSettings || sentence.visual?.subtitleSettings,
+                                    // CRITICAL: Preserve prompt and subtitleText when approving
+                                    prompt: currentVisual.prompt || sentence.visual?.prompt,
+                                    subtitleText: currentVisual.subtitleText || sentence.visual?.subtitleText,
                                   } as any
 
                                   // CRITICAL: Validate sentence.id exists in scriptData before updating

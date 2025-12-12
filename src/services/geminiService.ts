@@ -19,10 +19,12 @@ export interface JsonData {
   figures?: Array<{
     caption: string
     description: string
+    category?: 'methodology' | 'results' // Categorization of figure
   }>
   images?: Array<{
     caption: string
     description: string
+    category?: 'methodology' | 'results' // Categorization of figure
   }>
 }
 
@@ -44,6 +46,8 @@ export interface SentenceVisual {
     fontSize: number // Font size in pixels
     zoom: number // Subtitle zoom level (0.5 - 2.0)
   }
+  subtitleText?: string // Editable subtitle text (synchronized with video/audio generation)
+  prompt?: string // Image/video generation prompt (editable by user)
 }
 
 export interface SentenceAudio {
@@ -283,42 +287,83 @@ class GeminiService {
     try {
       const model = this.genAI.getGenerativeModel({ model: 'gemini-2.0-flash-exp' })
 
+      // Prepare categorized images for context
+      const methodologyImages = jsonData.images?.filter(img => img.category === 'methodology') || []
+      const resultsImages = jsonData.images?.filter(img => img.category === 'results') || []
+      // Removed unused figures variable
+
       const prompt = `You are a professional narration scriptwriter specializing in converting structured research data into short, natural, spoken-style scripts for video or audio narration.
 
 You will receive a JSON object containing:
 • metadata: title, authors, keywords, etc.
 • sections: abstract, introduction, background, methodology, discussion, results, conclusion
+• tables: data tables with key statistics and findings
+• images/figures: categorized into methodology (research methods, experimental setup, procedures) and results (findings, outcomes, conclusions)
+
+CRITICAL REQUIREMENT: You MUST extract and use information from ALL sections provided:
+1. ABSTRACT: Extract the main research question, key findings, and conclusions
+2. INTRODUCTION: Extract the problem statement, research objectives, and significance
+3. BACKGROUND: Extract relevant context, literature review insights, and theoretical framework
+4. METHODOLOGY: Extract research design, methods, procedures, algorithms, experimental setup, and data collection approaches
+5. RESULTS: Extract ALL findings, statistics, performance metrics, comparisons, and quantitative outcomes
+6. DISCUSSION: Extract interpretations, implications, limitations, and connections to existing research
+7. CONCLUSION: Extract main contributions, future work, and overall impact
+
+IMPORTANT: The images/figures are categorized to help you create more authentic and detailed scripts:
+- METHODOLOGY images: Use these when describing research methods, experimental setup, procedures, algorithms, or data collection processes
+- RESULTS images: Use these when describing findings, outcomes, performance metrics, or experimental results
+
+CRITICAL FIGURE USAGE RULES:
+- DO describe what the figure shows (e.g., "The experimental setup demonstrates...", "The results reveal a 15% improvement...", "Performance metrics show...")
+- DO use the data points, insights, and descriptions from figures naturally in your narrative
+- DO NOT mention "Figure 1", "Figure 2", "Fig. 1", "Fig. 2", or any figure numbers
+- DO NOT say "as shown in Figure X", "see Figure X", "Figure X shows", or any similar references
+- Instead, naturally describe the visual content and findings without referencing figure numbers
+- Integrate the figure information seamlessly into the narrative as if describing what was observed or measured
 
 Your job is to analyze this JSON and produce THREE DIFFERENT, distinct variations of a refined, engaging 90-second narration script (exactly 15 sentences, 220–250 words each) that:
 • Creates a compelling narrative that makes readers want to explore the full research
-• Covers ALL significant data, findings, and insights from the entire JSON content
-• Uses specific details, statistics, methodologies, and results from the research
+• MUST extract and incorporate information from ALL sections (abstract, introduction, background, methodology, results, discussion, conclusion)
+• MUST use specific details, statistics, methodologies, and results from EACH section
+• MUST reference tables when they contain relevant data or statistics
+• References and incorporates information from categorized images/figures when relevant
+• When discussing methodology, use insights from methodology images/figures to add authenticity - describe what they show naturally (e.g., "The experimental setup includes...", "The methodology demonstrates...") WITHOUT mentioning figure numbers
+• When discussing results, use insights from results images/figures to provide concrete evidence - describe the findings naturally (e.g., "The results reveal...", "Performance metrics show...") WITHOUT mentioning figure numbers
+• NEVER mention "Figure 1", "Figure 2", "Fig. 1", "Fig. 2", or any figure numbers in the script
 • Builds intellectual curiosity and demonstrates the depth of the study
 • Avoids generic phrases like "this video" or superficial summaries
-• Each sentence must contain substantial, specific information from the research
+• Each sentence must contain substantial, specific information extracted from the actual section content
 • Creates a sophisticated narrative that reflects the academic rigor of the work
 • Uses precise terminology and findings that showcase the study's contributions
 • STRUCTURE: Must have a strong opening hook, progressive body development, and impactful closing
 • NARRATIVE ARC: Build from problem identification through methodology to results and implications
 • CRITICAL: Each of the 15 sentences must be UNIQUE and DISTINCT - never repeat the same sentence or similar phrasing
+• CRITICAL: Do NOT skip any section - ensure information from all 7 sections is represented in the script
 
 🎯 Script Guidelines
-• Opening (5–10 sec): Introduce topic using the title and mention the authors' names. Set the context for the research.
-• Body (60 sec): Describe motivation, background, methods, and key findings in a flowing, narrative tone. Include specific details and insights from the research.
-• Closing (10–15 sec): Conclude with impact, implications, or next steps.
+• Opening (5–10 sec): Use ABSTRACT and INTRODUCTION sections. Introduce topic using the title and mention the authors' names. Set the context for the research using background information.
+• Body (60 sec): Use BACKGROUND, METHODOLOGY, RESULTS, and DISCUSSION sections. Describe motivation, background, methods, and key findings in a flowing, narrative tone. Include specific details and insights from each section. When describing methods, incorporate insights from methodology images/figures by describing what they show naturally (e.g., "The experimental setup includes...", "The methodology demonstrates...") - NEVER mention figure numbers. When describing results, incorporate insights from results images/figures by describing the findings naturally (e.g., "The results reveal a 15% improvement...", "Performance metrics show...") - NEVER mention figure numbers. Include statistics and data from tables.
+• Closing (10–15 sec): Use CONCLUSION and DISCUSSION sections. Conclude with impact, implications, or next steps.
 
 Paper Data:
 ${JSON.stringify(jsonData, null, 2)}
+
+Categorized Images/Figures:
+${methodologyImages.length > 0 ? `\nMETHODOLOGY IMAGES (${methodologyImages.length}):\n${methodologyImages.map((img, idx) => `- ${img.caption || `Figure ${idx + 1}`}: ${img.description}`).join('\n')}` : 'No methodology images'}
+${resultsImages.length > 0 ? `\nRESULTS IMAGES (${resultsImages.length}):\n${resultsImages.map((img, idx) => `- ${img.caption || `Figure ${idx + 1}`}: ${img.description}`).join('\n')}` : 'No results images'}
 
 CRITICAL REQUIREMENTS:
 1. Generate EXACTLY 15 UNIQUE sentences - each sentence must be completely different from all others
 2. Never repeat the same sentence, even with slight variations
 3. Each sentence should cover different aspects, findings, or implications from the research
-4. Generate THREE DISTINCTLY DIFFERENT script variations. Each script should:
+4. ABSOLUTE REQUIREMENT: NEVER mention "Figure 1", "Figure 2", "Fig. 1", "Fig. 2", or any figure numbers. Instead, describe what the figures show naturally (e.g., "The experimental setup demonstrates...", "The results reveal a 15% improvement...", "Performance metrics show...") without referencing figure numbers.
+5. Generate THREE DISTINCTLY DIFFERENT script variations. Each script should:
    - Have a different opening approach/hook
    - Emphasize different aspects of the research
    - Use varied narrative styles
    - Present information in different orders/structures
+
+ABSOLUTE REQUIREMENT: NEVER mention "Figure 1", "Figure 2", "Fig. 1", "Fig. 2", or any figure numbers in any of the scripts. Instead, describe what the figures show naturally (e.g., "The experimental setup demonstrates...", "The results reveal a 15% improvement...", "Performance metrics show...") without referencing figure numbers.
 
 Format your response EXACTLY as follows (no other text):
 
@@ -389,34 +434,77 @@ SCRIPT 3:
     try {
       const model = this.genAI.getGenerativeModel({ model: 'gemini-2.0-flash-exp' })
 
+      // Prepare categorized images for context
+      const methodologyImages = jsonData.images?.filter(img => img.category === 'methodology') || []
+      const resultsImages = jsonData.images?.filter(img => img.category === 'results') || []
+      // Removed unused figures variable
+
       const prompt = `You are a professional narration scriptwriter specializing in converting structured research data into short, natural, spoken-style scripts for video or audio narration.
 
 You will receive a JSON object containing:
 • metadata: title, authors, keywords, etc.
 • sections: abstract, introduction, background, methodology, discussion, results, conclusion
+• tables: data tables with key statistics and findings
+• images/figures: categorized into methodology (research methods, experimental setup, procedures) and results (findings, outcomes, conclusions)
+
+CRITICAL REQUIREMENT: You MUST extract and use information from ALL sections provided:
+1. ABSTRACT: Extract the main research question, key findings, and conclusions
+2. INTRODUCTION: Extract the problem statement, research objectives, and significance
+3. BACKGROUND: Extract relevant context, literature review insights, and theoretical framework
+4. METHODOLOGY: Extract research design, methods, procedures, algorithms, experimental setup, and data collection approaches
+5. RESULTS: Extract ALL findings, statistics, performance metrics, comparisons, and quantitative outcomes
+6. DISCUSSION: Extract interpretations, implications, limitations, and connections to existing research
+7. CONCLUSION: Extract main contributions, future work, and overall impact
+
+IMPORTANT: The images/figures are categorized to help you create more authentic and detailed scripts:
+- METHODOLOGY images: Use these when describing research methods, experimental setup, procedures, algorithms, or data collection processes
+- RESULTS images: Use these when describing findings, outcomes, performance metrics, or experimental results
 
 Your job is to analyze this JSON and produce a refined, engaging 90-second narration script (exactly 15 sentences, 220–250 words) that:
 • Creates a compelling narrative that makes readers want to explore the full research
-• Covers ALL significant data, findings, and insights from the entire JSON content
-• Uses specific details, statistics, methodologies, and results from the research
+• MUST extract and incorporate information from ALL sections (abstract, introduction, background, methodology, results, discussion, conclusion)
+• MUST use specific details, statistics, methodologies, and results from EACH section
+• MUST reference tables when they contain relevant data or statistics
+• References and incorporates information from categorized images/figures when relevant
+• When discussing methodology, use insights from methodology images/figures to add authenticity - describe what they show naturally (e.g., "The experimental setup includes...", "The methodology demonstrates...") WITHOUT mentioning figure numbers
+• When discussing results, use insights from results images/figures to provide concrete evidence - describe the findings naturally (e.g., "The results reveal...", "Performance metrics show...") WITHOUT mentioning figure numbers
+• NEVER mention "Figure 1", "Figure 2", "Fig. 1", "Fig. 2", or any figure numbers in the script
 • Builds intellectual curiosity and demonstrates the depth of the study
 • Avoids generic phrases like "this video" or superficial summaries
-• Each sentence must contain substantial, specific information from the research
+• Each sentence must contain substantial, specific information extracted from the actual section content
 • Creates a sophisticated narrative that reflects the academic rigor of the work
 • Uses precise terminology and findings that showcase the study's contributions
 • STRUCTURE: Must have a strong opening hook, progressive body development, and impactful closing
 • NARRATIVE ARC: Build from problem identification through methodology to results and implications
 • CRITICAL: Each of the 15 sentences must be UNIQUE and DISTINCT - never repeat the same sentence or similar phrasing
+• CRITICAL: Do NOT skip any section - ensure information from all 7 sections is represented in the script
 
 🎯 Script Guidelines
-• Opening (5–10 sec): Introduce topic using the title and mention the authors' names. Set the context for the research.
-• Body (60 sec): Describe motivation, background, methods, and key findings in a flowing, narrative tone. Include specific details and insights from the research.
-• Closing (10–15 sec): Conclude with impact, implications, or next steps.
+• Opening (5–10 sec): Use ABSTRACT and INTRODUCTION sections. Introduce topic using the title and mention the authors' names. Set the context for the research using background information.
+• Body (60 sec): Use BACKGROUND, METHODOLOGY, RESULTS, and DISCUSSION sections. Describe motivation, background, methods, and key findings in a flowing, narrative tone. Include specific details and insights from each section. When describing methods, incorporate insights from methodology images/figures by describing what they show naturally (e.g., "The experimental setup includes...", "The methodology demonstrates...") - NEVER mention figure numbers. When describing results, incorporate insights from results images/figures by describing the findings naturally (e.g., "The results reveal a 15% improvement...", "Performance metrics show...") - NEVER mention figure numbers. Include statistics and data from tables.
+• Closing (10–15 sec): Use CONCLUSION and DISCUSSION sections. Conclude with impact, implications, or next steps.
 
-Paper Data:
+COMPLETE PAPER DATA (USE ALL SECTIONS):
 ${JSON.stringify(jsonData, null, 2)}
 
-CRITICAL: Generate EXACTLY 15 UNIQUE sentences. Each sentence must be completely different - never repeat the same sentence or similar phrasing. Each sentence should cover different aspects, findings, or implications from the research.
+SECTION BREAKDOWN (Ensure you extract from ALL):
+- Abstract: ${(jsonData.sections && typeof jsonData.sections === 'object' && !Array.isArray(jsonData.sections) && jsonData.sections.abstract) ? `${String(jsonData.sections.abstract).substring(0, 500)}...` : 'Not available'}
+- Introduction: ${(jsonData.sections && typeof jsonData.sections === 'object' && !Array.isArray(jsonData.sections) && jsonData.sections.introduction) ? `${String(jsonData.sections.introduction).substring(0, 500)}...` : 'Not available'}
+- Background: ${(jsonData.sections && typeof jsonData.sections === 'object' && !Array.isArray(jsonData.sections) && jsonData.sections.background) ? `${String(jsonData.sections.background).substring(0, 500)}...` : 'Not available'}
+- Methodology: ${(jsonData.sections && typeof jsonData.sections === 'object' && !Array.isArray(jsonData.sections) && jsonData.sections.methodology) ? `${String(jsonData.sections.methodology).substring(0, 500)}...` : 'Not available'}
+- Results: ${(jsonData.sections && typeof jsonData.sections === 'object' && !Array.isArray(jsonData.sections) && jsonData.sections.results) ? `${String(jsonData.sections.results).substring(0, 500)}...` : 'Not available'}
+- Discussion: ${(jsonData.sections && typeof jsonData.sections === 'object' && !Array.isArray(jsonData.sections) && jsonData.sections.discussion) ? `${String(jsonData.sections.discussion).substring(0, 500)}...` : 'Not available'}
+- Conclusion: ${(jsonData.sections && typeof jsonData.sections === 'object' && !Array.isArray(jsonData.sections) && jsonData.sections.conclusion) ? `${String(jsonData.sections.conclusion).substring(0, 500)}...` : 'Not available'}
+
+Tables: ${jsonData.tables && jsonData.tables.length > 0 ? `${jsonData.tables.length} table(s) with data` : 'No tables'}
+
+Categorized Images/Figures:
+${methodologyImages.length > 0 ? `\nMETHODOLOGY IMAGES (${methodologyImages.length}):\n${methodologyImages.map((img, idx) => `- ${img.caption || `Figure ${idx + 1}`}: ${img.description}`).join('\n')}` : 'No methodology images'}
+${resultsImages.length > 0 ? `\nRESULTS IMAGES (${resultsImages.length}):\n${resultsImages.map((img, idx) => `- ${img.caption || `Figure ${idx + 1}`}: ${img.description}`).join('\n')}` : 'No results images'}
+
+CRITICAL: Generate EXACTLY 15 UNIQUE sentences. Each sentence must be completely different - never repeat the same sentence or similar phrasing. Each sentence should cover different aspects, findings, or implications from the research. Ensure you extract information from ALL 7 sections (abstract, introduction, background, methodology, results, discussion, conclusion).
+
+ABSOLUTE REQUIREMENT: NEVER mention "Figure 1", "Figure 2", "Fig. 1", "Fig. 2", or any figure numbers. Instead, describe what the figures show naturally (e.g., "The experimental setup demonstrates...", "The results reveal a 15% improvement...", "Performance metrics show...") without referencing figure numbers.
 
 Generate only the script text, no additional commentary or formatting.`
 
@@ -579,32 +667,72 @@ Generate only the script text, no additional commentary or formatting.`
     try {
       const model = this.genAI.getGenerativeModel({ model: 'gemini-2.0-flash-exp' })
 
+      // Prepare categorized images for context
+      const methodologyImages = jsonData.images?.filter(img => img.category === 'methodology') || []
+      const resultsImages = jsonData.images?.filter(img => img.category === 'results') || []
+
       const prompt = `You are a professional narration scriptwriter specializing in converting structured research data into short, natural, spoken-style scripts for video or audio narration.
 
 You will receive a JSON object containing:
 • metadata: title, authors, keywords, etc.
 • sections: abstract, introduction, background, methodology, discussion, results, conclusion
+• tables: data tables with key statistics and findings
+• images/figures: categorized into methodology (research methods, experimental setup, procedures) and results (findings, outcomes, conclusions)
+
+CRITICAL REQUIREMENT: You MUST extract and use information from ALL sections provided:
+1. ABSTRACT: Extract the main research question, key findings, and conclusions
+2. INTRODUCTION: Extract the problem statement, research objectives, and significance
+3. BACKGROUND: Extract relevant context, literature review insights, and theoretical framework
+4. METHODOLOGY: Extract research design, methods, procedures, algorithms, experimental setup, and data collection approaches
+5. RESULTS: Extract ALL findings, statistics, performance metrics, comparisons, and quantitative outcomes
+6. DISCUSSION: Extract interpretations, implications, limitations, and connections to existing research
+7. CONCLUSION: Extract main contributions, future work, and overall impact
+
+IMPORTANT: The images/figures are categorized to help you create more authentic and detailed scripts:
+- METHODOLOGY images: Use these when describing research methods, experimental setup, procedures, algorithms, or data collection processes
+- RESULTS images: Use these when describing findings, outcomes, performance metrics, or experimental results
 
 Your job is to analyze this JSON and produce a refined, engaging 90-second narration script (exactly 15 sentences, 220–250 words) that:
 • Creates a compelling narrative that makes readers want to explore the full research
-• Covers ALL significant data, findings, and insights from the entire JSON content
-• Uses specific details, statistics, methodologies, and results from the research
+• MUST extract and incorporate information from ALL sections (abstract, introduction, background, methodology, results, discussion, conclusion)
+• MUST use specific details, statistics, methodologies, and results from EACH section
+• MUST reference tables when they contain relevant data or statistics
+• References and incorporates information from categorized images/figures when relevant
+• When discussing methodology, use insights from methodology images/figures to add authenticity - describe what they show naturally (e.g., "The experimental setup includes...", "The methodology demonstrates...") WITHOUT mentioning figure numbers
+• When discussing results, use insights from results images/figures to provide concrete evidence - describe the findings naturally (e.g., "The results reveal...", "Performance metrics show...") WITHOUT mentioning figure numbers
+• NEVER mention "Figure 1", "Figure 2", "Fig. 1", "Fig. 2", or any figure numbers in the script
 • Builds intellectual curiosity and demonstrates the depth of the study
 • Avoids generic phrases like "this video" or superficial summaries
-• Each sentence must contain substantial, specific information from the research
+• Each sentence must contain substantial, specific information extracted from the actual section content
 • Creates a sophisticated narrative that reflects the academic rigor of the work
 • Uses precise terminology and findings that showcase the study's contributions
 • STRUCTURE: Must have a strong opening hook, progressive body development, and impactful closing
 • NARRATIVE ARC: Build from problem identification through methodology to results and implications
 • CRITICAL: Each of the 15 sentences must be UNIQUE and DISTINCT - never repeat the same sentence or similar phrasing
+• CRITICAL: Do NOT skip any section - ensure information from all 7 sections is represented in the script
 
 🎯 Script Guidelines
-• Opening (5–10 sec): Introduce topic using the title and mention the authors' names. Set the context for the research.
-• Body (60 sec): Describe motivation, background, methods, and key findings in a flowing, narrative tone. Include specific details and insights from the research.
-• Closing (10–15 sec): Conclude with impact, implications, or next steps.
+• Opening (5–10 sec): Use ABSTRACT and INTRODUCTION sections. Introduce topic using the title and mention the authors' names. Set the context for the research using background information.
+• Body (60 sec): Use BACKGROUND, METHODOLOGY, RESULTS, and DISCUSSION sections. Describe motivation, background, methods, and key findings in a flowing, narrative tone. Include specific details and insights from each section. When describing methods, incorporate insights from methodology images/figures by describing what they show naturally (e.g., "The experimental setup includes...", "The methodology demonstrates...") - NEVER mention figure numbers. When describing results, incorporate insights from results images/figures by describing the findings naturally (e.g., "The results reveal a 15% improvement...", "Performance metrics show...") - NEVER mention figure numbers. Include statistics and data from tables.
+• Closing (10–15 sec): Use CONCLUSION and DISCUSSION sections. Conclude with impact, implications, or next steps.
 
-Paper Data:
+COMPLETE PAPER DATA (USE ALL SECTIONS):
 ${JSON.stringify(jsonData, null, 2)}
+
+SECTION BREAKDOWN (Ensure you extract from ALL):
+- Abstract: ${(jsonData.sections && typeof jsonData.sections === 'object' && !Array.isArray(jsonData.sections) && jsonData.sections.abstract) ? `${String(jsonData.sections.abstract).substring(0, 500)}...` : 'Not available'}
+- Introduction: ${(jsonData.sections && typeof jsonData.sections === 'object' && !Array.isArray(jsonData.sections) && jsonData.sections.introduction) ? `${String(jsonData.sections.introduction).substring(0, 500)}...` : 'Not available'}
+- Background: ${(jsonData.sections && typeof jsonData.sections === 'object' && !Array.isArray(jsonData.sections) && jsonData.sections.background) ? `${String(jsonData.sections.background).substring(0, 500)}...` : 'Not available'}
+- Methodology: ${(jsonData.sections && typeof jsonData.sections === 'object' && !Array.isArray(jsonData.sections) && jsonData.sections.methodology) ? `${String(jsonData.sections.methodology).substring(0, 500)}...` : 'Not available'}
+- Results: ${(jsonData.sections && typeof jsonData.sections === 'object' && !Array.isArray(jsonData.sections) && jsonData.sections.results) ? `${String(jsonData.sections.results).substring(0, 500)}...` : 'Not available'}
+- Discussion: ${(jsonData.sections && typeof jsonData.sections === 'object' && !Array.isArray(jsonData.sections) && jsonData.sections.discussion) ? `${String(jsonData.sections.discussion).substring(0, 500)}...` : 'Not available'}
+- Conclusion: ${(jsonData.sections && typeof jsonData.sections === 'object' && !Array.isArray(jsonData.sections) && jsonData.sections.conclusion) ? `${String(jsonData.sections.conclusion).substring(0, 500)}...` : 'Not available'}
+
+Tables: ${jsonData.tables && jsonData.tables.length > 0 ? `${jsonData.tables.length} table(s) with data` : 'No tables'}
+
+Categorized Images/Figures:
+${methodologyImages.length > 0 ? `\nMETHODOLOGY IMAGES (${methodologyImages.length}):\n${methodologyImages.map((img, idx) => `- ${img.caption || `Figure ${idx + 1}`}: ${img.description}`).join('\n')}` : 'No methodology images'}
+${resultsImages.length > 0 ? `\nRESULTS IMAGES (${resultsImages.length}):\n${resultsImages.map((img, idx) => `- ${img.caption || `Figure ${idx + 1}`}: ${img.description}`).join('\n')}` : 'No results images'}
 
 ${currentScript ? `Previous Script (for reference):
 ${currentScript}
@@ -612,6 +740,8 @@ ${currentScript}
 Please generate a different version while maintaining the same quality and structure.` : ''}
 
 CRITICAL: Generate EXACTLY 15 UNIQUE sentences. Each sentence must be completely different - never repeat the same sentence or similar phrasing. Each sentence should cover different aspects, findings, or implications from the research.
+
+ABSOLUTE REQUIREMENT: NEVER mention "Figure 1", "Figure 2", "Fig. 1", "Fig. 2", or any figure numbers. Instead, describe what the figures show naturally (e.g., "The experimental setup demonstrates...", "The results reveal a 15% improvement...", "Performance metrics show...") without referencing figure numbers.
 
 Generate only the script text, no additional commentary or formatting.`
 

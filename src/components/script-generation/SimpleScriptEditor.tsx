@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect, useMemo } from 'react'
+import { useState, useRef, useEffect } from 'react'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
@@ -71,18 +71,11 @@ export function SimpleScriptEditor({
   const editorRef = useRef<HTMLDivElement>(null)
   const saveTimeoutRef = useRef<NodeJS.Timeout | null>(null)
   const isDialogClosingRef = useRef(false)
+  const isUserEditingRef = useRef(false) // Track when user is actively editing
 
   // Removed handleCloseDialog - DialogContent already has built-in close button
 
   // Note: Editor is now opened manually via "Open Video Editor" button
-
-  // Create a dependency string that changes when visual approval status changes
-  const visualApprovalKey = useMemo(() => {
-    if (!scriptData?.sentences) return ''
-    return scriptData.sentences
-      .map(s => `${s.id}:${s.visual?.approved === true ? '1' : '0'}:${s.visual?.videoUrl ? 'v' : ''}:${s.visual?.imageUrl ? 'i' : ''}`)
-      .join('|')
-  }, [scriptData?.sentences])
 
   // CRITICAL: Sync scriptData prop to currentScriptData - scriptData prop is source of truth
   // When parent updates scriptData (via onScriptUpdate), it flows back as prop and we sync it
@@ -104,6 +97,15 @@ export function SimpleScriptEditor({
       return isApproved && hasVideo
     }).length || 0
     
+    // Create a dependency string that changes when visual approval status changes
+    // Compute this inside useEffect to avoid setState during render
+    const visualApprovalKey = scriptData.sentences
+      ?.map(s => `${s.id}:${s.visual?.approved === true ? '1' : '0'}:${s.visual?.videoUrl ? 'v' : ''}:${s.visual?.imageUrl ? 'i' : ''}`)
+      .join('|') || ''
+    const currentVisualApprovalKey = currentScriptData?.sentences
+      ?.map(s => `${s.id}:${s.visual?.approved === true ? '1' : '0'}:${s.visual?.videoUrl ? 'v' : ''}:${s.visual?.imageUrl ? 'i' : ''}`)
+      .join('|') || ''
+    
     // Always sync from prop when approved count changes or data structure changes
     // This ensures approved visuals persist when gallery is hidden/shown
     // CRITICAL: Also check if any visual approval status changed (even if count is same)
@@ -117,17 +119,67 @@ export function SimpleScriptEditor({
       return propApproved !== currentApproved || propHasVideo !== currentHasVideo
     })
     
-    if (!currentScriptData || propApprovedCount !== currentApprovedCount || scriptData.sentences?.length !== currentScriptData.sentences?.length || hasApprovalChange) {
-      setCurrentScriptData(scriptData)
-      // Removed verbose logging
+    // CRITICAL: Don't sync if user is actively editing - wait for them to finish
+    if (isUserEditingRef.current) {
+      return // Skip sync while user is editing
     }
     
-    // Set initial editor content
-    if (editorRef.current && isInitialLoad) {
-      editorRef.current.innerHTML = scriptData.script
-      setIsInitialLoad(false)
+    // CRITICAL: Check if text changed - if currentScriptData has newer text edits, preserve them
+    const hasTextChange = currentScriptData && scriptData.sentences?.some((s, idx) => {
+      const current = currentScriptData.sentences?.[idx]
+      return current && current.text !== s.text
+    })
+    
+    // CRITICAL: Always preserve user's text edits from currentScriptData
+    // Only sync visual/approval changes from prop, never overwrite text
+    if (!currentScriptData || propApprovedCount !== currentApprovedCount || scriptData.sentences?.length !== currentScriptData.sentences?.length || hasApprovalChange || visualApprovalKey !== currentVisualApprovalKey) {
+      // Merge: ALWAYS keep user's text edits from currentScriptData, update visuals from prop
+      const mergedSentences = scriptData.sentences.map((propSentence, idx) => {
+        const currentSentence = currentScriptData?.sentences?.[idx]
+        if (currentSentence) {
+          // ALWAYS preserve text from currentScriptData (user's edits)
+          return {
+            ...propSentence,
+            text: currentSentence.text, // CRITICAL: Always use current text
+            // Preserve other current properties too
+            approved: currentSentence.approved,
+            audio: currentSentence.audio,
+            // But update visual from prop (if it changed)
+            visual: propSentence.visual || currentSentence.visual
+          }
+        }
+        return propSentence
+      })
+      
+      setCurrentScriptData({
+        ...scriptData,
+        script: currentScriptData?.script || scriptData.script, // Keep user's edited script HTML
+        sentences: mergedSentences
+      })
+    } else if (hasTextChange && currentScriptData) {
+      // If only text changed (user edited), preserve ALL current data
+      // Don't sync from prop if user has made text edits
+      // The currentScriptData already has the latest text, so keep it
+      return // Don't overwrite user's edits
     }
-  }, [scriptData, visualApprovalKey]) // Sync whenever scriptData prop or approval status changes
+    
+    // Update editor content when script changes (but not if user is editing)
+    if (editorRef.current && !isUserEditingRef.current) {
+      // Only update if the script HTML actually changed
+      const currentHtml = editorRef.current.innerHTML
+      if (currentScriptData && scriptData.script !== currentHtml) {
+        // Only update if it's a significant change (not just whitespace)
+        const currentText = editorRef.current.innerText.trim()
+        const newText = scriptData.script.replace(/<[^>]*>/g, '').trim()
+        if (currentText !== newText) {
+          editorRef.current.innerHTML = scriptData.script
+        }
+      } else if (isInitialLoad) {
+        editorRef.current.innerHTML = scriptData.script
+        setIsInitialLoad(false)
+      }
+    }
+  }, [scriptData, currentScriptData]) // Only depend on scriptData and currentScriptData to avoid render issues
 
   // Cleanup timeout on unmount
   useEffect(() => {
@@ -146,6 +198,9 @@ export function SimpleScriptEditor({
 
   const handleEditorChange = () => {
     if (!editorRef.current || !currentScriptData) return
+    
+    // Mark that user is actively editing
+    isUserEditingRef.current = true
     
     // Save cursor position before updating
     const selection = window.getSelection()
@@ -193,13 +248,25 @@ export function SimpleScriptEditor({
     if (sentences.length > 0) {
       const updatedSentences = sentences.map((text, index) => {
         const originalSentence = currentScriptData.sentences[index]
-        return {
-          ...originalSentence,
-          text: text.trim(),
-        } as Sentence
+        if (originalSentence) {
+          // Preserve all original properties, only update text
+          return {
+            ...originalSentence,
+            text: text.trim(),
+          } as Sentence
+        } else {
+          // Create new sentence if it doesn't exist
+          return {
+            id: `sentence_${Date.now()}_${index}`,
+            text: text.trim(),
+            approved: false,
+          } as Sentence
+        }
       })
       
       // Ensure we maintain the same number of sentences
+      // If we have more sentences than before, keep the new ones
+      // If we have fewer, keep the existing ones that weren't updated
       const finalSentences = updatedSentences.length >= currentScriptData.sentences.length 
         ? updatedSentences 
         : [...updatedSentences, ...currentScriptData.sentences.slice(updatedSentences.length)]
@@ -211,6 +278,23 @@ export function SimpleScriptEditor({
       }
       
       setCurrentScriptData(updatedScriptData)
+      
+      // Sync changes to parent component (sentence management) - REAL-TIME
+      if (onScriptUpdate) {
+        // Clear existing timeout
+        if (saveTimeoutRef.current) {
+          clearTimeout(saveTimeoutRef.current)
+        }
+        
+        // Call immediately for real-time updates - this updates the parent
+        onScriptUpdate(updatedScriptData)
+        
+        // Set a debounced version to mark editing as complete
+        saveTimeoutRef.current = setTimeout(() => {
+          isUserEditingRef.current = false // Mark editing as complete after 500ms
+          saveTimeoutRef.current = null
+        }, 500) // Debounce to mark editing complete
+      }
       
       // Restore cursor position
       if (selection && range) {
@@ -285,6 +369,9 @@ export function SimpleScriptEditor({
           mode: visual.mode || sentence.visual?.mode,
           transitionType: visual.transitionType || sentence.visual?.transitionType,
           subtitleSettings: visual.subtitleSettings || sentence.visual?.subtitleSettings,
+          // CRITICAL: Preserve prompt and subtitleText when updating
+          prompt: visual.prompt !== undefined ? visual.prompt : sentence.visual?.prompt,
+          subtitleText: visual.subtitleText !== undefined ? visual.subtitleText : sentence.visual?.subtitleText,
           // CRITICAL: Ensure approved status is set - force boolean true/false
           approved: visual.approved === true || visual.status === 'approved' ? true : false,
           status: visual.status || sentence.visual?.status || (visual.approved ? 'approved' : 'pending'),
@@ -413,6 +500,9 @@ export function SimpleScriptEditor({
         mode: existingVisual.mode,
         transitionType: existingVisual.transitionType,
         subtitleSettings: existingVisual.subtitleSettings,
+        // CRITICAL: Preserve prompt and subtitleText when approving
+        prompt: existingVisual.prompt,
+        subtitleText: existingVisual.subtitleText,
       }
       
       // Removed verbose logging
@@ -579,7 +669,6 @@ export function SimpleScriptEditor({
 
     return (
       <div
-        key={sentence.id}
         className={`p-3 rounded-lg border cursor-pointer transition-colors ${
           isSelected 
             ? 'border-primary bg-primary/5' 
@@ -752,7 +841,11 @@ export function SimpleScriptEditor({
         </CardHeader>
         <CardContent>
           <div className="space-y-3 max-h-[400px] overflow-y-auto">
-            {currentScriptData.sentences.map(renderSentence)}
+            {currentScriptData.sentences.map((sentence) => (
+              <div key={sentence.id || `sentence-${sentence.text?.substring(0, 10)}`}>
+                {renderSentence(sentence)}
+              </div>
+            ))}
           </div>
         </CardContent>
       </Card>

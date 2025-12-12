@@ -63,6 +63,10 @@ interface PodcastResponse {
 
 class ElevenLabsService {
   private axiosInstance: AxiosInstance;
+  // Cache for voices to prevent multiple API calls
+  private voicesCache: { voices: Voice[]; timestamp: number } | null = null;
+  private readonly VOICES_CACHE_TTL = 5 * 60 * 1000; // 5 minutes
+  private voicesLoadingPromise: Promise<Voice[]> | null = null; // Prevent concurrent calls
   private tokenRefreshPromise: Promise<string> | null = null;
 
   constructor() {
@@ -284,28 +288,54 @@ class ElevenLabsService {
   }
 
   /**
-   * Get available voices from ElevenLabs
+   * Get available voices from ElevenLabs (with caching and deduplication)
    */
   async getVoices(): Promise<Voice[]> {
-    try {
-      console.log('🎤 Fetching voices from backend...');
-      const response = await this.axiosInstance.get<VoicesResponse>('/voices');
-      console.log('✅ Voices fetched:', response.data.data.voices?.length || 0);
-      return response.data.data.voices || [];
-    } catch (error: any) {
-      console.error('❌ Get voices error:', error);
-      
-      // Better error handling
-      if (error.response?.status === 401) {
-        throw new Error('Authentication failed. Please log in again.');
-      } else if (error.response?.data?.message) {
-        throw new Error(error.response.data.message);
-      } else if (error.message) {
-        throw new Error(error.message);
-      } else {
-        throw new Error('Failed to fetch voices. Please check your connection and try again.');
-      }
+    // Check cache first
+    if (this.voicesCache && Date.now() - this.voicesCache.timestamp < this.VOICES_CACHE_TTL) {
+      return this.voicesCache.voices;
     }
+
+    // If there's already a loading request, wait for it instead of making a new one
+    if (this.voicesLoadingPromise) {
+      return this.voicesLoadingPromise;
+    }
+
+    // Create a new loading promise
+    this.voicesLoadingPromise = (async () => {
+      try {
+        console.log('🎤 Fetching voices from backend...');
+        const response = await this.axiosInstance.get<VoicesResponse>('/voices');
+        const voices = response.data.data.voices || [];
+        console.log('✅ Voices fetched:', voices.length);
+        
+        // Cache the result
+        this.voicesCache = {
+          voices,
+          timestamp: Date.now(),
+        };
+        
+        return voices;
+      } catch (error: any) {
+        console.error('❌ Get voices error:', error);
+        
+        // Better error handling
+        if (error.response?.status === 401) {
+          throw new Error('Authentication failed. Please log in again.');
+        } else if (error.response?.data?.message) {
+          throw new Error(error.response.data.message);
+        } else if (error.message) {
+          throw new Error(error.message);
+        } else {
+          throw new Error('Failed to fetch voices. Please check your connection and try again.');
+        }
+      } finally {
+        // Clear loading promise after completion
+        this.voicesLoadingPromise = null;
+      }
+    })();
+
+    return this.voicesLoadingPromise;
   }
 
   /**

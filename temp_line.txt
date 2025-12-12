@@ -1,0 +1,1 @@
+﻿            {currentScriptData.sentences.map((sentence) => (`<div key={sentence.id || `sentence-${sentence.text?.substring(0, 10)}`}>{renderSentence(sentence)}</div>))}

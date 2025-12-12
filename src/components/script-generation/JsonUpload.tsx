@@ -24,10 +24,12 @@ interface JsonData {
   figures?: Array<{
     caption: string
     description: string
+    category?: 'methodology' | 'results'
   }>
   images?: Array<{
     caption: string
     description: string
+    category?: 'methodology' | 'results'
   }>
 }
 
@@ -183,12 +185,53 @@ export function JsonUpload({ onJsonLoaded, onGenerateScript, isLoading = false }
   const renderFigures = () => {
     if (!jsonData?.figures || jsonData.figures.length === 0) return null
 
+    const methodologyCount = jsonData.figures.filter(f => f.category === 'methodology').length
+    const resultsCount = jsonData.figures.filter(f => f.category === 'results').length
+
     return (
       <div className="p-3 border rounded-md bg-muted/20">
-        <h4 className="font-medium text-sm">Figures ({jsonData.figures.length})</h4>
-        <p className="text-xs text-muted-foreground mt-1">
-          {jsonData.figures.length} figures available for script generation
-        </p>
+        <h4 className="font-medium text-sm mb-2">Figures ({jsonData.figures.length})</h4>
+        <div className="space-y-2">
+          <div className="flex gap-2 flex-wrap">
+            {methodologyCount > 0 && (
+              <Badge variant="outline" className="bg-blue-50 dark:bg-blue-950 border-blue-200 dark:border-blue-800">
+                Methodology: {methodologyCount}
+              </Badge>
+            )}
+            {resultsCount > 0 && (
+              <Badge variant="outline" className="bg-green-50 dark:bg-green-950 border-green-200 dark:border-green-800">
+                Results: {resultsCount}
+              </Badge>
+            )}
+          </div>
+          <div className="space-y-2 mt-2">
+            {jsonData.figures.map((figure, index) => (
+              <div key={index} className="p-2 border rounded bg-background">
+                <div className="flex items-start justify-between gap-2">
+                  <div className="flex-1">
+                    <div className="flex items-center gap-2 mb-1">
+                      <span className="font-medium text-sm">{figure.caption || `Figure ${index + 1}`}</span>
+                      {figure.category && (
+                        <Badge 
+                          variant="outline" 
+                          className={figure.category === 'methodology' 
+                            ? 'bg-blue-50 dark:bg-blue-950 border-blue-200 dark:border-blue-800 text-blue-700 dark:text-blue-300'
+                            : 'bg-green-50 dark:bg-green-950 border-green-200 dark:border-green-800 text-green-700 dark:text-green-300'
+                          }
+                        >
+                          {figure.category === 'methodology' ? '📊 Methodology' : '📈 Results'}
+                        </Badge>
+                      )}
+                    </div>
+                    <p className="text-xs text-muted-foreground line-clamp-2">
+                      {figure.description || 'No description available'}
+                    </p>
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
       </div>
     )
   }
@@ -196,12 +239,53 @@ export function JsonUpload({ onJsonLoaded, onGenerateScript, isLoading = false }
   const renderImages = () => {
     if (!jsonData?.images || jsonData.images.length === 0) return null
 
+    const methodologyCount = jsonData.images.filter(img => img.category === 'methodology').length
+    const resultsCount = jsonData.images.filter(img => img.category === 'results').length
+
     return (
       <div className="p-3 border rounded-md bg-muted/20">
-        <h4 className="font-medium text-sm">Images ({jsonData.images.length})</h4>
-        <p className="text-xs text-muted-foreground mt-1">
-          {jsonData.images.length} images available for script generation
-        </p>
+        <h4 className="font-medium text-sm mb-2">Images ({jsonData.images.length})</h4>
+        <div className="space-y-2">
+          <div className="flex gap-2 flex-wrap">
+            {methodologyCount > 0 && (
+              <Badge variant="outline" className="bg-blue-50 dark:bg-blue-950 border-blue-200 dark:border-blue-800">
+                Methodology: {methodologyCount}
+              </Badge>
+            )}
+            {resultsCount > 0 && (
+              <Badge variant="outline" className="bg-green-50 dark:bg-green-950 border-green-200 dark:border-green-800">
+                Results: {resultsCount}
+              </Badge>
+            )}
+          </div>
+          <div className="space-y-2 mt-2">
+            {jsonData.images.map((image, index) => (
+              <div key={index} className="p-2 border rounded bg-background">
+                <div className="flex items-start justify-between gap-2">
+                  <div className="flex-1">
+                    <div className="flex items-center gap-2 mb-1">
+                      <span className="font-medium text-sm">{image.caption || `Image ${index + 1}`}</span>
+                      {image.category && (
+                        <Badge 
+                          variant="outline" 
+                          className={image.category === 'methodology' 
+                            ? 'bg-blue-50 dark:bg-blue-950 border-blue-200 dark:border-blue-800 text-blue-700 dark:text-blue-300'
+                            : 'bg-green-50 dark:bg-green-950 border-green-200 dark:border-green-800 text-green-700 dark:text-green-300'
+                          }
+                        >
+                          {image.category === 'methodology' ? '📊 Methodology' : '📈 Results'}
+                        </Badge>
+                      )}
+                    </div>
+                    <p className="text-xs text-muted-foreground line-clamp-2">
+                      {image.description || 'No description available'}
+                    </p>
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
       </div>
     )
   }

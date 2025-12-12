@@ -134,8 +134,10 @@ export function AudioGallery({
   }
 
   const handleGenerate = async () => {
-    if (!sentence.text) {
-      toast.error('No sentence text available')
+    // Use subtitleText if available (synchronized with video), otherwise use sentence.text
+    const audioText = sentence.visual?.subtitleText || sentence.text;
+    if (!audioText) {
+      toast.error('No text available for audio generation')
       return
     }
 
@@ -147,7 +149,7 @@ export function AudioGallery({
 
     try {
       const result = await elevenLabsService.generateAudio({
-        text: sentence.text,
+        text: audioText, // Use synchronized subtitle text if available
         sentenceId: sentence.id,
         voiceId: selectedVoiceId,
       })

@@ -24,12 +24,14 @@ import {
   X,
   Home,
   Video,
+  Image as ImageIcon,
 } from "lucide-react";
 import { toast } from "sonner";
 import { grobidApi, CompleteExtractedData, LLMExtractionResponse } from '@/services/grobidApi';
 import { geminiService, ScriptData } from '@/services/geminiService';
 import { ScriptSelection } from '@/components/script-generation/ScriptSelection';
 import { SimpleScriptEditor } from '@/components/script-generation/SimpleScriptEditor';
+import { ImageViewer } from '@/components/script-generation/ImageViewer';
 
 interface ProcessingStep {
   id: string;
@@ -112,6 +114,11 @@ export default function PdfToVideoPage() {
   const [threeScripts, setThreeScripts] = useState<ScriptData[]>(savedState?.threeScripts || []);
   const [selectedScript, setSelectedScript] = useState<ScriptData | null>(savedState?.selectedScript || null);
   const [isGeneratingScript, setIsGeneratingScript] = useState(false);
+
+  // Image Viewer state
+  const [imageViewerOpen, setImageViewerOpen] = useState(false);
+  const [currentImageIndex, setCurrentImageIndex] = useState(0);
+  const [viewingImages, setViewingImages] = useState<CompleteExtractedData['images']>([]);
 
   // Auto-save workflow state whenever it changes
   useEffect(() => {
@@ -285,8 +292,14 @@ export default function PdfToVideoPage() {
           abstract: extractedData.sections.abstract
         },
         sections: extractedData.sections,
-        tables: extractedData.tables.map(t => ({ caption: t.title, data: t.data })),
-        images: extractedData.images.map(i => ({ caption: i.title, description: i.description }))
+        images: extractedData.images.map(img => ({
+          caption: img.caption || img.title || '',
+          description: img.description,
+          category: img.category,
+          key_insights: img.key_insights,
+          data_points: img.data_points,
+        })),
+        tables: extractedData.tables.map(t => ({ caption: t.title, data: t.data }))
       };
 
       const scripts = await geminiService.generate3Scripts(jsonData);
@@ -327,7 +340,13 @@ export default function PdfToVideoPage() {
         },
         sections: extractedData.sections,
         tables: extractedData.tables.map(t => ({ caption: t.title, data: t.data })),
-        images: extractedData.images.map(i => ({ caption: i.title, description: i.description }))
+        images: extractedData.images.map(i => ({
+          caption: i.caption || i.title || '',
+          description: i.description,
+          category: i.category,
+          key_insights: i.key_insights,
+          data_points: i.data_points,
+        }))
       };
 
       const regeneratedScript = await geminiService.regenerateUnapprovedSentences(jsonData, selectedScript);
@@ -746,14 +765,70 @@ export default function PdfToVideoPage() {
                   <div className="space-y-3 p-4 border rounded-lg">
                     <h4 className="text-lg font-semibold">Academic Sections</h4>
                     <div className="space-y-3">
-                      {Object.entries(extractedData.sections).map(([sectionName, content]) => (
-                        <div key={sectionName} className="border rounded-lg p-3 bg-muted/20">
-                          <h5 className="font-medium capitalize mb-2 text-sm">{sectionName}</h5>
-                          <p className="text-xs text-muted-foreground line-clamp-3">
-                            {content || 'No content available'}
-                          </p>
-                        </div>
-                      ))}
+                      {Object.entries(extractedData.sections).map(([sectionName, content]) => {
+                        // Get categorized images for this section
+                        const sectionImages = extractedData.images.filter(img => {
+                          if (sectionName.toLowerCase() === 'methodology') {
+                            return img.category === 'methodology'
+                          } else if (sectionName.toLowerCase() === 'results') {
+                            return img.category === 'results'
+                          }
+                          return false
+                        })
+
+                        return (
+                          <div key={sectionName} className="border rounded-lg p-3 bg-muted/20">
+                            <div className="flex items-center justify-between mb-2">
+                              <h5 className="font-medium capitalize text-sm">{sectionName}</h5>
+                              {sectionImages.length > 0 && (
+                                <Badge variant="secondary" className="text-xs">
+                                  {sectionImages.length} {sectionImages.length === 1 ? 'image' : 'images'}
+                                </Badge>
+                              )}
+                            </div>
+                            <p className="text-xs text-muted-foreground line-clamp-3 mb-2">
+                              {content || 'No content available'}
+                            </p>
+                            
+                            {/* Display categorized images for Methodology and Results */}
+                            {(sectionName.toLowerCase() === 'methodology' || sectionName.toLowerCase() === 'results') && sectionImages.length > 0 && (
+                              <div className="mt-3 pt-3 border-t">
+                                <div className="flex items-center gap-2 mb-2">
+                                  <Eye className="h-3.5 w-3.5 text-muted-foreground" />
+                                  <span className="text-xs font-medium text-muted-foreground">Figures ({sectionImages.length})</span>
+                                </div>
+                                <div className="grid grid-cols-2 gap-2">
+                                  {sectionImages.map((img, idx) => (
+                                    <Button
+                                      key={img.id || idx}
+                                      variant="outline"
+                                      size="sm"
+                                      className="h-auto p-2 flex flex-col items-start text-left hover:bg-accent"
+                                      onClick={() => {
+                                        setViewingImages(sectionImages)
+                                        setCurrentImageIndex(idx)
+                                        setImageViewerOpen(true)
+                                      }}
+                                    >
+                                      <div className="flex items-center gap-2 w-full">
+                                        <ImageIcon className="h-4 w-4 text-primary flex-shrink-0" />
+                                        <span className="text-xs font-medium truncate flex-1">
+                                          {img.caption || img.title || `Figure ${idx + 1}`}
+                                        </span>
+                                      </div>
+                                      {img.description && (
+                                        <p className="text-xs text-muted-foreground line-clamp-2 mt-1 w-full">
+                                          {img.description}
+                                        </p>
+                                      )}
+                                    </Button>
+                                  ))}
+                                </div>
+                              </div>
+                            )}
+                          </div>
+                        )
+                      })}
                     </div>
                   </div>
 
@@ -896,7 +971,9 @@ export default function PdfToVideoPage() {
               onScriptUpdate={handleScriptUpdate}
               isLoading={isGeneratingScript}
               tables={extractedData?.tables.map(t => ({ title: t.title, data: t.data }))}
-              images={extractedData?.images.map(i => ({ title: i.title, description: i.description }))}
+              images={extractedData?.images
+                .filter(i => i.category === 'methodology' || i.category === 'results')
+                .map(i => ({ title: i.title || i.caption || '', description: i.description }))}
             />
           </div>
         )}
@@ -940,9 +1017,36 @@ export default function PdfToVideoPage() {
               onScriptUpdate={handleScriptUpdate}
               isLoading={isGeneratingScript}
               tables={extractedData?.tables.map(t => ({ title: t.title, data: t.data }))}
-              images={extractedData?.images.map(i => ({ title: i.title, description: i.description }))}
+              images={extractedData?.images
+                .filter(i => i.category === 'methodology' || i.category === 'results')
+                .map(i => ({
+                  title: i.caption || i.title || '',
+                  description: i.description,
+                  category: i.category,
+                }))}
             />
           </div>
+        )}
+
+        {/* Image Viewer */}
+        {extractedData && sessionId && (
+          <ImageViewer
+            images={viewingImages}
+            currentIndex={currentImageIndex}
+            isOpen={imageViewerOpen}
+            onClose={() => setImageViewerOpen(false)}
+            onNext={() => {
+              if (currentImageIndex < viewingImages.length - 1) {
+                setCurrentImageIndex(currentImageIndex + 1)
+              }
+            }}
+            onPrevious={() => {
+              if (currentImageIndex > 0) {
+                setCurrentImageIndex(currentImageIndex - 1)
+              }
+            }}
+            sessionId={sessionId}
+          />
         )}
       </div>
     </DashboardLayout>
