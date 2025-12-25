@@ -4,6 +4,8 @@ import {
   GalleryVerticalEnd,
   FileText,
   SquareTerminal,
+  Settings,
+  Share2,
 } from "lucide-react"
 import { useAppSelector } from '@/store/hooks'
 
@@ -57,6 +59,18 @@ const data = {
       title: "Script Generation",
       url: "/script-generation",
       icon: FileText,
+      isActive: false,
+    },
+    {
+      title: "Distribution",
+      url: "/distribution",
+      icon: Share2,
+      isActive: false,
+    },
+    {
+      title: "SNS Settings",
+      url: "/settings/sns",
+      icon: Settings,
       isActive: false,
     },
     // {

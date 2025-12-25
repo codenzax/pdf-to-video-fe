@@ -7,6 +7,9 @@ import ResetPasswordPage from '@/pages/ResetPasswordPage'
 import DashboardPage from '@/pages/dashboard/DashboardPage'
 import PdfToVideoPage from '@/pages/dashboard/PdfToVideoPage'
 import ProfilePage from '@/pages/dashboard/ProfilePage'
+import SnsSettingsPage from '@/pages/dashboard/SnsSettingsPage'
+import DistributionRequestsPage from '@/pages/dashboard/DistributionRequestsPage'
+import HistoryPage from '@/pages/dashboard/HistoryPage'
 import { ProtectedRoute, PublicRoute } from '@/components/routes/ProtectedRoute'
 import ScriptGenerationPage from '@/pages/dashboard/ScriptGenerationPage'
 
@@ -85,6 +88,30 @@ export function AppRoutes() {
         element={
           <ProtectedRoute>
             <ProfilePage />
+          </ProtectedRoute>
+        }
+      />
+        <Route
+          path="/distribution"
+          element={
+            <ProtectedRoute>
+              <DistributionRequestsPage />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/history"
+          element={
+            <ProtectedRoute>
+              <HistoryPage />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/settings/sns"
+          element={
+            <ProtectedRoute>
+              <SnsSettingsPage />
           </ProtectedRoute>
         }
       />

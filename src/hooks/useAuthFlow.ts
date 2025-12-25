@@ -49,6 +49,7 @@ export function useHandleLogin() {
 
 export function useHandleSignup() {
   const navigate = useNavigate()
+  const dispatch = useAppDispatch()
   const [registerUser, state] = useRegisterMutation()
 
   async function submit(values: { firstName: string; lastName: string; email: string; password: string; confirmPassword: string }) {
@@ -64,9 +65,23 @@ export function useHandleSignup() {
         password: values.password,
       })
       if ('data' in res) {
-        localStorage.setItem('pendingEmail', values.email)
-        toast.info('Account created. Please verify your email.')
-        navigate('/otp', { replace: true })
+        const data: any = res.data
+        if (data?.accessToken) {
+          // OTP verification disabled - user is automatically logged in
+          // Store user data in Redux
+          dispatch(setCredentials({
+            user: data.user,
+            accessToken: data.accessToken,
+            refreshToken: data.refreshToken
+          }))
+          toast.success('Account created successfully. You are now logged in.')
+          navigate('/dashboard', { replace: true })
+        } else if (data?.email) {
+          // Fallback for OTP flow (if re-enabled later)
+          localStorage.setItem('pendingEmail', values.email)
+          toast.info('Account created. Please verify your email.')
+          navigate('/otp', { replace: true })
+        }
       } else if ('error' in res) {
         const err: any = res.error
         // Handle validation errors with specific field messages

@@ -24,6 +24,9 @@ interface StaticVideoResponse {
 class GPTStaticVideoService {
   private axiosInstance: AxiosInstance;
   private tokenRefreshPromise: Promise<string> | null = null;
+  // VERSION MARKER: v2.0 - Fixed subtitleSettings parameter issue
+  // TIMESTAMP: 2024-12-19-REBUILD-FORCE
+  private readonly VERSION = 'v2.0-2024-12-19-FORCE-REBUILD';
 
   constructor() {
     this.axiosInstance = axios.create({
@@ -137,6 +140,7 @@ class GPTStaticVideoService {
 
   /**
    * Generate static video from sentence using GPT + DALL-E 3 + FFMPEG
+   * VERSION: v2.0 - All parameters properly defined with defaults
    */
   async generateStaticVideo(
     sentence: string,
@@ -148,23 +152,102 @@ class GPTStaticVideoService {
     },
     zoomEffect: 'zoom-in' | 'zoom-out' | 'none' = 'none',
     transitionType: 'fade' | 'slide' | 'dissolve' | 'none' = 'fade',
-    subtitleSettings?: { yPosition?: number; fontSize?: number; zoom?: number },
-    subtitleText?: string, // Custom subtitle text (editable by user)
-    customPrompt?: string, // Custom image/video generation prompt (editable by user)
-    tables?: Array<{ title: string; data: string }>,
-    images?: Array<{ title: string; description: string }>
+    subtitleSettings: { yPosition?: number; fontSize?: number; zoom?: number } | undefined = undefined,
+    subtitleText: string | undefined = undefined,
+    customPrompt: string | undefined = undefined,
+    tables: Array<{ title: string; data: string }> | undefined = undefined,
+    images: Array<{ title: string; description: string }> | undefined = undefined,
+    imageSource: 'ai' | 'unsplash' | undefined = undefined,
+    unsplashImageUrl: string | undefined = undefined,
+    presentationText: string[] | undefined = undefined
   ): Promise<{
     imageUrl: string;
     videoUrl: string;
     prompt: string;
     duration: number;
   }> {
+    // VERSION CHECK - Log version to confirm new code is loaded
+    console.log(`🚀 GPTStaticVideoService ${this.VERSION} - generateStaticVideo called`);
+    
     try {
-      console.log('🎨 Generating static video with GPT...', { sentence, hasCustomPrompt: !!customPrompt, hasSubtitleText: !!subtitleText });
+      // All parameters are now explicitly defined with defaults - no undefined references possible
+      console.log('🔍 Parameters received:', {
+        hasSentence: !!sentence,
+        duration,
+        hasContext: !!context,
+        zoomEffect,
+        transitionType,
+        hasSubtitleSettings: subtitleSettings !== undefined,
+        hasSubtitleText: subtitleText !== undefined,
+        hasCustomPrompt: customPrompt !== undefined,
+        hasTables: tables !== undefined,
+        hasImages: images !== undefined,
+        imageSource,
+        hasUnsplashImageUrl: unsplashImageUrl !== undefined,
+        hasPresentationText: presentationText !== undefined,
+      });
+      
+      // Log based on image source
+      if (imageSource === 'unsplash') {
+        console.log('📷 UNSPLASH MODE: Generating video with Unsplash image (NOT DALL-E)', { 
+          imageSource, 
+          hasUnsplashUrl: !!unsplashImageUrl,
+          unsplashImageUrl: unsplashImageUrl?.substring(0, 100),
+          sentence: sentence.substring(0, 50)
+        });
+      } else {
+        console.log('🎨 DALL-E MODE: Generating video with GPT/DALL-E', { 
+          imageSource, 
+          hasCustomPrompt: !!customPrompt, 
+        });
+      }
+
+      // Build request body - ALL parameters are guaranteed to exist due to defaults
+      const requestBody: Record<string, any> = {
+        sentence,
+        duration,
+        context,
+        zoomEffect,
+        transitionType,
+      };
+      
+      // Safely add optional parameters only if they are provided
+      if (subtitleSettings !== undefined && subtitleSettings !== null) {
+        requestBody.subtitleSettings = subtitleSettings;
+      }
+      if (subtitleText !== undefined && subtitleText !== null) {
+        requestBody.subtitleText = subtitleText;
+      }
+      if (presentationText !== undefined && presentationText !== null) {
+        requestBody.presentationText = presentationText;
+      }
+      if (customPrompt !== undefined && customPrompt !== null) {
+        requestBody.customPrompt = customPrompt;
+      }
+      if (tables !== undefined && tables !== null) {
+        requestBody.tables = tables;
+      }
+      if (images !== undefined && images !== null) {
+        requestBody.images = images;
+      }
+      if (imageSource !== undefined && imageSource !== null) {
+        requestBody.imageSource = imageSource;
+      }
+      if (unsplashImageUrl !== undefined && unsplashImageUrl !== null) {
+        requestBody.unsplashImageUrl = unsplashImageUrl;
+      }
+      
+      console.log('📤 SENDING REQUEST TO BACKEND:', {
+        version: this.VERSION,
+        imageSource,
+        hasUnsplashImageUrl: !!unsplashImageUrl,
+        unsplashImageUrl: unsplashImageUrl?.substring(0, 100),
+        requestBodyKeys: Object.keys(requestBody),
+      });
 
       const response = await this.axiosInstance.post<StaticVideoResponse>(
         '/generate-static',
-        { sentence, duration, context, zoomEffect, transitionType, subtitleSettings, subtitleText, customPrompt, tables, images }
+        requestBody
       );
 
       console.log('📦 GPT Static Response:', response.data);
@@ -186,11 +269,38 @@ class GPTStaticVideoService {
       // Prefer data URL so backend can consume base64 during assembly
       const videoUrl = `data:video/mp4;base64,${result.videoBase64}`;
 
-      console.log('✅ GPT static video generated:', {
-        imageUrl: result.imageUrl,
-        videoUrl,
-        duration: result.duration,
-      });
+      // Check if image URL is from Unsplash or DALL-E
+      const isUnsplashImage = result.imageUrl && (
+        result.imageUrl.includes('unsplash.com') || 
+        result.imageUrl.includes('images.unsplash.com') ||
+        result.imageUrl.startsWith('https://')
+      );
+      const isDALLEImage = result.imageUrl && result.imageUrl.startsWith('data:image');
+      
+      if (imageSource === 'unsplash') {
+        if (isUnsplashImage) {
+          console.log('✅✅✅ UNSPLASH VIDEO SUCCESS: Generated with Unsplash image', {
+            imageUrl: result.imageUrl.substring(0, 100),
+            isUnsplashImage,
+            isDALLEImage,
+            duration: result.duration,
+          });
+        } else {
+          console.error('❌❌❌ ERROR: Unsplash mode requested but DALL-E image was returned!', {
+            imageUrl: result.imageUrl?.substring(0, 100),
+            isUnsplashImage,
+            isDALLEImage,
+            expected: 'Unsplash URL',
+            got: isDALLEImage ? 'DALL-E base64 image' : 'Unknown format'
+          });
+        }
+      } else {
+        console.log('✅ DALL-E video generated:', {
+          imageUrl: result.imageUrl?.substring(0, 100),
+          isDALLEImage,
+          duration: result.duration,
+        });
+      }
 
       return {
         imageUrl: result.imageUrl,
@@ -199,7 +309,7 @@ class GPTStaticVideoService {
         duration: result.duration,
       };
     } catch (error: any) {
-      console.error('❌ GPT static video error:', error);
+      console.error(`❌ GPT static video error (${this.VERSION}):`, error);
 
       if (error.response?.data?.message) {
         throw new Error(error.response.data.message);
@@ -271,10 +381,41 @@ class GPTStaticVideoService {
   }
 
   /**
-   * Convert base64 string to Blob
+   * Rebake video text overlays without regenerating the entire video
    */
-  // Removed unused function base64ToBlob
+  async rebakeVideoText(
+    videoBase64: string,
+    subtitleText?: string,
+    presentationText?: string[],
+    subtitleSettings?: { fontSize?: number; yPosition?: number; zoom?: number }
+  ): Promise<{
+    videoBase64: string;
+  }> {
+    try {
+      const requestBody = {
+        videoBase64,
+        subtitleText,
+        presentationText,
+        subtitleSettings,
+      };
+
+      const response = await this.axiosInstance.post<{
+        data: {
+          videoBase64: string;
+        };
+      }>('/rebake-text', requestBody);
+
+      return {
+        videoBase64: response.data.data.videoBase64,
+      };
+    } catch (error: any) {
+      console.error('Video rebake error:', error);
+      if (error.response?.data?.message) {
+        throw new Error(error.response.data.message);
+      }
+      throw new Error(error.message || 'Failed to rebake video text');
+    }
+  }
 }
 
 export const gptStaticVideoService = new GPTStaticVideoService();
-

@@ -30,6 +30,7 @@ import { VisualGallery } from './VisualGallery'
 import { AudioGallery } from './AudioGallery'
 import { VideoTimelineEditor } from './VideoTimelineEditor'
 import { BackgroundMusicComponent } from './BackgroundMusic'
+// Removed SentenceEditor - sentences are now only displayed as text, all editing in Final Video Editor
 // Removed unused import
 // import { elevenLabsService } from '@/services/elevenLabsService'
 import { Sentence, SentenceVisual, SentenceAudio, ScriptData, BackgroundMusic } from '@/services/geminiService'
@@ -42,6 +43,7 @@ interface SimpleScriptEditorProps {
   onApprove: (sentenceId: string) => void
   onRegenerate: () => void
   onExport: (data: ScriptData) => void
+  onVideoExport?: (videoUrl: string, videoBase64: string) => void // Callback for video export from VideoTimelineEditor
   onScriptUpdate?: (data: ScriptData) => void // Callback to sync state back to parent
   isLoading?: boolean
   paperContext?: string // Paper title, authors, etc. for video generation context
@@ -54,13 +56,14 @@ export function SimpleScriptEditor({
   onApprove, 
   onRegenerate, 
   onExport,
+  onVideoExport,
   onScriptUpdate,
   isLoading = false,
   paperContext,
   tables,
   images
 }: SimpleScriptEditorProps) {
-  const [selectedSentenceId, setSelectedSentenceId] = useState<string | null>(null)
+  const [selectedSentenceId, _setSelectedSentenceId] = useState<string | null>(null)
   const [isPlaying, setIsPlaying] = useState(false)
   const [currentScriptData, setCurrentScriptData] = useState<ScriptData | null>(scriptData)
   const [isInitialLoad, setIsInitialLoad] = useState(true)
@@ -77,109 +80,67 @@ export function SimpleScriptEditor({
 
   // Note: Editor is now opened manually via "Open Video Editor" button
 
-  // CRITICAL: Sync scriptData prop to currentScriptData - scriptData prop is source of truth
-  // When parent updates scriptData (via onScriptUpdate), it flows back as prop and we sync it
+  // Sync scriptData prop to currentScriptData - scriptData prop is source of truth
   useEffect(() => {
     if (!scriptData) {
       setCurrentScriptData(null)
       return
     }
     
-    // Check if scriptData actually changed by comparing sentence visual states
-    const propApprovedCount = scriptData.sentences?.filter(s => {
-      const isApproved = s.visual?.approved === true || s.visual?.status === 'approved'
-      const hasVideo = !!(s.visual?.videoUrl || s.visual?.imageUrl)
-      return isApproved && hasVideo
-    }).length || 0
-    const currentApprovedCount = currentScriptData?.sentences?.filter(s => {
-      const isApproved = s.visual?.approved === true || s.visual?.status === 'approved'
-      const hasVideo = !!(s.visual?.videoUrl || s.visual?.imageUrl)
-      return isApproved && hasVideo
-    }).length || 0
-    
-    // Create a dependency string that changes when visual approval status changes
-    // Compute this inside useEffect to avoid setState during render
-    const visualApprovalKey = scriptData.sentences
-      ?.map(s => `${s.id}:${s.visual?.approved === true ? '1' : '0'}:${s.visual?.videoUrl ? 'v' : ''}:${s.visual?.imageUrl ? 'i' : ''}`)
-      .join('|') || ''
-    const currentVisualApprovalKey = currentScriptData?.sentences
-      ?.map(s => `${s.id}:${s.visual?.approved === true ? '1' : '0'}:${s.visual?.videoUrl ? 'v' : ''}:${s.visual?.imageUrl ? 'i' : ''}`)
-      .join('|') || ''
-    
-    // Always sync from prop when approved count changes or data structure changes
-    // This ensures approved visuals persist when gallery is hidden/shown
-    // CRITICAL: Also check if any visual approval status changed (even if count is same)
-    const hasApprovalChange = scriptData.sentences?.some((s, idx) => {
-      const current = currentScriptData?.sentences?.[idx]
-      if (!current) return true
-      const propApproved = s.visual?.approved === true || s.visual?.status === 'approved'
-      const currentApproved = current.visual?.approved === true || current.visual?.status === 'approved'
-      const propHasVideo = !!(s.visual?.videoUrl || s.visual?.imageUrl)
-      const currentHasVideo = !!(current.visual?.videoUrl || current.visual?.imageUrl)
-      return propApproved !== currentApproved || propHasVideo !== currentHasVideo
-    })
-    
-    // CRITICAL: Don't sync if user is actively editing - wait for them to finish
+    // Don't sync if user is actively editing
     if (isUserEditingRef.current) {
-      return // Skip sync while user is editing
+      return
     }
     
-    // CRITICAL: Check if text changed - if currentScriptData has newer text edits, preserve them
-    const hasTextChange = currentScriptData && scriptData.sentences?.some((s, idx) => {
-      const current = currentScriptData.sentences?.[idx]
-      return current && current.text !== s.text
-    })
-    
-    // CRITICAL: Always preserve user's text edits from currentScriptData
-    // Only sync visual/approval changes from prop, never overwrite text
-    if (!currentScriptData || propApprovedCount !== currentApprovedCount || scriptData.sentences?.length !== currentScriptData.sentences?.length || hasApprovalChange || visualApprovalKey !== currentVisualApprovalKey) {
-      // Merge: ALWAYS keep user's text edits from currentScriptData, update visuals from prop
+    // Update currentScriptData from prop, preserving user edits if they exist
+    setCurrentScriptData(prev => {
+      if (!prev) {
+        return scriptData
+      }
+      
+      // Preserve user's text edits from currentScriptData
       const mergedSentences = scriptData.sentences.map((propSentence, idx) => {
-        const currentSentence = currentScriptData?.sentences?.[idx]
+        const currentSentence = prev.sentences?.[idx]
         if (currentSentence) {
-          // ALWAYS preserve text from currentScriptData (user's edits)
           return {
             ...propSentence,
-            text: currentSentence.text, // CRITICAL: Always use current text
-            // Preserve other current properties too
+            text: currentSentence.text, // Preserve user's text edits
+            presentation_text: currentSentence.presentation_text, // Preserve presentation_text
             approved: currentSentence.approved,
             audio: currentSentence.audio,
-            // But update visual from prop (if it changed)
             visual: propSentence.visual || currentSentence.visual
           }
         }
         return propSentence
       })
       
-      setCurrentScriptData({
+      return {
         ...scriptData,
-        script: currentScriptData?.script || scriptData.script, // Keep user's edited script HTML
+        script: prev.script || scriptData.script, // Preserve edited script HTML
         sentences: mergedSentences
-      })
-    } else if (hasTextChange && currentScriptData) {
-      // If only text changed (user edited), preserve ALL current data
-      // Don't sync from prop if user has made text edits
-      // The currentScriptData already has the latest text, so keep it
-      return // Don't overwrite user's edits
-    }
+      }
+    })
     
     // Update editor content when script changes (but not if user is editing)
-    if (editorRef.current && !isUserEditingRef.current) {
-      // Only update if the script HTML actually changed
+    if (editorRef.current && !isUserEditingRef.current && scriptData.script) {
       const currentHtml = editorRef.current.innerHTML
-      if (currentScriptData && scriptData.script !== currentHtml) {
-        // Only update if it's a significant change (not just whitespace)
-        const currentText = editorRef.current.innerText.trim()
-        const newText = scriptData.script.replace(/<[^>]*>/g, '').trim()
-        if (currentText !== newText) {
-          editorRef.current.innerHTML = scriptData.script
-        }
-      } else if (isInitialLoad) {
+      if (currentHtml !== scriptData.script) {
+        editorRef.current.innerHTML = scriptData.script
+        setIsInitialLoad(false)
+      } else if (isInitialLoad && scriptData.script) {
         editorRef.current.innerHTML = scriptData.script
         setIsInitialLoad(false)
       }
     }
-  }, [scriptData, currentScriptData]) // Only depend on scriptData and currentScriptData to avoid render issues
+  }, [scriptData])
+
+  // Initialize editor content on mount
+  useEffect(() => {
+    if (editorRef.current && scriptData?.script && isInitialLoad && !editorRef.current.innerHTML.trim()) {
+      editorRef.current.innerHTML = scriptData.script
+      setIsInitialLoad(false)
+    }
+  }, [scriptData, isInitialLoad])
 
   // Cleanup timeout on unmount
   useEffect(() => {
@@ -308,10 +269,6 @@ export function SimpleScriptEditor({
     }
   }
 
-  const handleSentenceClick = (sentenceId: string) => {
-    setSelectedSentenceId(sentenceId)
-  }
-
   const handleApproveSentence = (sentenceId: string) => {
     if (!currentScriptData) return
     
@@ -398,24 +355,41 @@ export function SimpleScriptEditor({
       return updatedScriptData
     })
     
-    // CRITICAL: Save when video is generated (not just approved) - debounced to prevent spam
-    // This ensures videos persist after reload, even if not approved yet
-    if (onScriptUpdate && (visual.videoUrl || visual.imageUrl)) {
+    // CRITICAL: Only save when video is generated or approved - NOT on every subtitle setting change
+    // This prevents excessive session updates. Subtitle settings will be saved when user clicks Approve.
+    // Only save here if it's a new video generation (has videoUrl/imageUrl but visual wasn't set before)
+    const isNewVideoGeneration = (visual.videoUrl || visual.imageUrl) && (!targetSentence.visual?.videoUrl && !targetSentence.visual?.imageUrl)
+    const isApprovedVideo = visual.approved === true
+    
+    if (onScriptUpdate && (isNewVideoGeneration || isApprovedVideo)) {
       // Clear existing timeout
       if (saveTimeoutRef.current) {
         clearTimeout(saveTimeoutRef.current)
       }
       
-      // Debounce save to prevent repeated calls
-      saveTimeoutRef.current = setTimeout(() => {
+      // Save immediately for approved videos, debounce for new generations
+      const saveDelay = isApprovedVideo ? 0 : 2000
+      
+      if (saveDelay === 0) {
+        // Save immediately for approved videos (critical data)
         setCurrentScriptData(prev => {
           if (prev && onScriptUpdate) {
             onScriptUpdate(prev)
           }
           return prev
         })
-        saveTimeoutRef.current = null
-      }, 2000) // 2 second debounce
+      } else {
+        // Debounce save for new video generations
+        saveTimeoutRef.current = setTimeout(() => {
+          setCurrentScriptData(prev => {
+            if (prev && onScriptUpdate) {
+              onScriptUpdate(prev)
+            }
+            return prev
+          })
+          saveTimeoutRef.current = null
+        }, saveDelay)
+      }
     }
   }
 
@@ -427,6 +401,12 @@ export function SimpleScriptEditor({
     
     const sentence = currentScriptData.sentences.find(s => s.id === sentenceId)
     if (!sentence) return
+    
+    // CRITICAL: Ensure dialog stays open and user stays on the same page after approval
+    // Don't close dialog or redirect - user should remain in Video Editor
+    if (!showEditorDialog) {
+      setShowEditorDialog(true)
+    }
     
     // Approve video if exists and not already approved
     if (sentence.visual && !sentence.visual.approved) {
@@ -467,6 +447,15 @@ export function SimpleScriptEditor({
         availableIds: currentScriptData.sentences.map(s => s.id.substring(0, 8)),
       })
       return
+    }
+    
+    // CRITICAL: Ensure dialog stays open and user stays on the same page after approval
+    // Don't close dialog or redirect - user should remain in Video Editor
+    if (!showEditorDialog) {
+      setShowEditorDialog(true)
+    }
+    if (!showVisualGallery) {
+      setShowVisualGallery(true)
     }
     
     // Removed verbose logging
@@ -552,6 +541,11 @@ export function SimpleScriptEditor({
   }
   
   const handleAudioApprove = (sentenceId: string) => {
+    // CRITICAL: Ensure dialog stays open and user stays on the same page after approval
+    // Don't close dialog or redirect - user should remain in Video Editor
+    if (!showEditorDialog) {
+      setShowEditorDialog(true)
+    }
     handleCombinedApprove(sentenceId)
   }
 
@@ -669,18 +663,18 @@ export function SimpleScriptEditor({
 
     return (
       <div
-        className={`p-3 rounded-lg border cursor-pointer transition-colors ${
+        className={`rounded-lg border transition-colors ${
           isSelected 
             ? 'border-primary bg-primary/5' 
             : isApproved 
               ? 'border-green-200 bg-green-50 dark:border-green-800 dark:bg-green-950' 
-              : 'border-muted hover:border-muted-foreground/50'
+              : 'border-muted'
         }`}
-        onClick={() => handleSentenceClick(sentence.id)}
       >
-        <div className="flex items-start justify-between gap-3">
-          <div className="flex-1">
-            <div className="flex items-center gap-2 mb-2">
+        <div className="p-4">
+          {/* Header with sentence info */}
+          <div className="flex items-center justify-between mb-3">
+            <div className="flex items-center gap-2">
               <Badge variant={isApproved ? "default" : "secondary"} className="text-xs">
                 {isApproved ? 'Approved' : 'Pending'}
               </Badge>
@@ -693,13 +687,6 @@ export function SimpleScriptEditor({
                 </span>
               )}
             </div>
-            <p className={`text-sm leading-relaxed ${
-              isApproved ? 'text-green-700 dark:text-green-300' : ''
-            }`}>
-              {sentence.text}
-            </p>
-          </div>
-          <div className="flex items-center gap-1">
             {!isApproved && (
               <Button
                 size="sm"
@@ -708,12 +695,20 @@ export function SimpleScriptEditor({
                   e.stopPropagation()
                   handleApproveSentence(sentence.id)
                 }}
-                className="h-8 w-8 p-0"
+                className="h-8"
               >
-                <CheckCircle className="h-4 w-4" />
+                <CheckCircle className="h-4 w-4 mr-1" />
+                Approve
               </Button>
             )}
           </div>
+
+          {/* Sentence text only - all editing in Final Video Editor */}
+          <p className={`text-sm leading-relaxed ${
+            isApproved ? 'text-green-700 dark:text-green-300' : 'text-foreground'
+          }`}>
+            {sentence.text}
+          </p>
         </div>
       </div>
     )
@@ -833,10 +828,7 @@ export function SimpleScriptEditor({
             </Badge>
           </CardTitle>
           <CardDescription>
-            Review and approve individual sentences. Approved sentences will be included in the final script.
-            <span className="text-xs text-blue-600 dark:text-blue-400 ml-2">
-              💡 Changes in the editor above automatically sync here
-            </span>
+            Review and approve individual sentences. All editing (text, bullet points, subtitles, etc.) is done in the Final Video Editor.
           </CardDescription>
         </CardHeader>
         <CardContent>
@@ -1159,14 +1151,14 @@ export function SimpleScriptEditor({
             </DialogDescription>
           </DialogHeader>
           {currentScriptData ? (() => {
-            // Create a key based on visual states to force re-render when videos are approved
-            // Create a key that changes when approval status changes
+            // Create a stable key that doesn't change on approval - only changes when videos are added/removed
+            // This prevents remounting when approving, keeping user on the same page
             const visualStatesKey = currentScriptData.sentences
               .map(s => {
-                const approved = s.visual?.approved === true || s.visual?.status === 'approved' ? '1' : '0'
+                // Only include video/image presence, NOT approval status (to prevent remount on approval)
                 const hasVideo = s.visual?.videoUrl ? 'v' : ''
                 const hasImage = s.visual?.imageUrl ? 'i' : ''
-                return `${s.id}:${approved}:${hasVideo}${hasImage}`
+                return `${s.id}:${hasVideo}${hasImage}`
               })
               .join('|')
             
@@ -1186,9 +1178,12 @@ export function SimpleScriptEditor({
                 paperContext={paperContext}
                 key={`timeline-${currentScriptData.id || 'default'}-${visualStatesKey.substring(0, 300)}`}
                 scriptData={currentScriptData}
-                onExport={() => {
-                  // Video exported
-                  toast.success('✅ Video exported successfully!')
+                onVideoExport={onVideoExport}
+                onExport={(videoUrl, videoBase64) => {
+                  // Video marked as completed - save to session
+                  if (onVideoExport) {
+                    onVideoExport(videoUrl, videoBase64);
+                  }
                 }}
               />
             )

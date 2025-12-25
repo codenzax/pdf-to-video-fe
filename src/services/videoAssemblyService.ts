@@ -25,6 +25,8 @@ export interface VideoSegment {
   endTime?: number; // Crop end time in seconds
   transitionType?: 'fade' | 'slide' | 'dissolve' | 'none';
   subtitleSettings?: SubtitleSettings; // For Canvas text/subtitles overlay
+  subtitleText?: string; // Subtitle text (speaking use)
+  presentationText?: string[]; // Presentation text / bullet points (viewing use / slide text)
 }
 
 export interface AssemblyRequest {

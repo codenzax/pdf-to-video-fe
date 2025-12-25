@@ -35,7 +35,7 @@ export interface SentenceVisual {
   status: 'pending' | 'generating' | 'completed' | 'failed' | 'approved' | 'rejected'
   approved: boolean
   uploaded?: boolean // true if user uploaded custom video
-  mode?: 'gpt' | 'veo3' // Generation mode
+  mode?: 'gpt' | 'unsplash' // Generation mode
   imageUrl?: string // For GPT static mode - stores the background image (no text)
   videoBase64?: string // Base64 encoded video (for blob URL conversion)
   imageBase64?: string // Base64 encoded image (for blob URL conversion)
@@ -47,7 +47,19 @@ export interface SentenceVisual {
     zoom: number // Subtitle zoom level (0.5 - 2.0)
   }
   subtitleText?: string // Editable subtitle text (synchronized with video/audio generation)
+  presentationText?: string[] // Bullet points to display centered in video (baked into video)
   prompt?: string // Image/video generation prompt (editable by user)
+  // Unsplash image support
+  imageSource?: 'ai' | 'unsplash' // Image source: AI generation or Unsplash
+  unsplashImageData?: {
+    id: string
+    url: string
+    photographer: string
+    photographerUsername: string
+    photographerUrl: string
+    unsplashUrl: string
+    description: string | null
+  } // Unsplash image metadata with attribution
 }
 
 export interface SentenceAudio {
@@ -82,7 +94,8 @@ export interface BackgroundMusic {
 
 export interface Sentence {
   id: string
-  text: string
+  text: string // Speaking use (subtitles)
+  presentation_text?: string[] // Viewing use (slide text) - array of bullet points
   approved: boolean
   startTime?: number
   endTime?: number
@@ -321,29 +334,76 @@ CRITICAL FIGURE USAGE RULES:
 - Instead, naturally describe the visual content and findings without referencing figure numbers
 - Integrate the figure information seamlessly into the narrative as if describing what was observed or measured
 
-Your job is to analyze this JSON and produce THREE DIFFERENT, distinct variations of a refined, engaging 90-second narration script (exactly 15 sentences, 220–250 words each) that:
-• Creates a compelling narrative that makes readers want to explore the full research
-• MUST extract and incorporate information from ALL sections (abstract, introduction, background, methodology, results, discussion, conclusion)
-• MUST use specific details, statistics, methodologies, and results from EACH section
-• MUST reference tables when they contain relevant data or statistics
-• References and incorporates information from categorized images/figures when relevant
-• When discussing methodology, use insights from methodology images/figures to add authenticity - describe what they show naturally (e.g., "The experimental setup includes...", "The methodology demonstrates...") WITHOUT mentioning figure numbers
-• When discussing results, use insights from results images/figures to provide concrete evidence - describe the findings naturally (e.g., "The results reveal...", "Performance metrics show...") WITHOUT mentioning figure numbers
-• NEVER mention "Figure 1", "Figure 2", "Fig. 1", "Fig. 2", or any figure numbers in the script
-• Builds intellectual curiosity and demonstrates the depth of the study
-• Avoids generic phrases like "this video" or superficial summaries
-• Each sentence must contain substantial, specific information extracted from the actual section content
-• Creates a sophisticated narrative that reflects the academic rigor of the work
-• Uses precise terminology and findings that showcase the study's contributions
-• STRUCTURE: Must have a strong opening hook, progressive body development, and impactful closing
-• NARRATIVE ARC: Build from problem identification through methodology to results and implications
-• CRITICAL: Each of the 15 sentences must be UNIQUE and DISTINCT - never repeat the same sentence or similar phrasing
-• CRITICAL: Do NOT skip any section - ensure information from all 7 sections is represented in the script
+Your job is to analyze this JSON and produce THREE DIFFERENT, distinct variations of a refined, engaging 90-second narration script (exactly 15 sentences, TOTAL word count between 275-350 words for the entire script).
 
-🎯 Script Guidelines
-• Opening (5–10 sec): Use ABSTRACT and INTRODUCTION sections. Introduce topic using the title and mention the authors' names. Set the context for the research using background information.
-• Body (60 sec): Use BACKGROUND, METHODOLOGY, RESULTS, and DISCUSSION sections. Describe motivation, background, methods, and key findings in a flowing, narrative tone. Include specific details and insights from each section. When describing methods, incorporate insights from methodology images/figures by describing what they show naturally (e.g., "The experimental setup includes...", "The methodology demonstrates...") - NEVER mention figure numbers. When describing results, incorporate insights from results images/figures by describing the findings naturally (e.g., "The results reveal a 15% improvement...", "Performance metrics show...") - NEVER mention figure numbers. Include statistics and data from tables.
-• Closing (10–15 sec): Use CONCLUSION and DISCUSSION sections. Conclude with impact, implications, or next steps.
+FOR EACH SENTENCE, you must generate TWO separate outputs:
+
+1. SCRIPT TEXT (Speaking use / Subtitles): Natural, spoken language for narration/subtitles
+   - Creates a compelling narrative that makes readers want to explore the full research
+   - MUST extract and incorporate information from ALL sections (abstract, introduction, background, methodology, results, discussion, conclusion)
+   - MUST use specific details, statistics, methodologies, and results from EACH section
+   - MUST reference tables when they contain relevant data or statistics
+   - References and incorporates information from categorized images/figures when relevant
+   - When discussing methodology, use insights from methodology images/figures to add authenticity - describe what they show naturally (e.g., "The experimental setup includes...", "The methodology demonstrates...") WITHOUT mentioning figure numbers
+   - When discussing results, use insights from results images/figures to provide concrete evidence - describe the findings naturally (e.g., "The results reveal...", "Performance metrics show...") WITHOUT mentioning figure numbers
+   - NEVER mention "Figure 1", "Figure 2", "Fig. 1", "Fig. 2", or any figure numbers in the script
+   - Builds intellectual curiosity and demonstrates the depth of the study
+   - Avoids generic phrases like "this video" or superficial summaries
+   - Each sentence must contain substantial, specific information extracted from the actual section content
+   - Creates a sophisticated narrative that reflects the academic rigor of the work
+   - Uses precise terminology and findings that showcase the study's contributions
+   - STRUCTURE: Must have a strong opening hook, progressive body development, and impactful closing
+   - NARRATIVE ARC: Build from problem identification through methodology to results and implications
+   - SENTENCE LENGTH: Keep each sentence between 15-25 words (normal range). Avoid sentences exceeding 30 words. Maintain consistent length across sentences.
+   - CRITICAL: Each of the 15 sentences must be UNIQUE and DISTINCT - never repeat the same sentence or similar phrasing
+   - CRITICAL: Do NOT skip any section - ensure information from all 7 sections is represented in the script
+   - CRITICAL: Total word count for entire script must be between 275-350 words
+
+2. PRESENTATION TEXT (Viewing use / Slide text): 2-4 concise bullet points summarizing key points for presentation slides
+   - Extract the core content and main ideas from each sentence
+   - Format as bullet points (use "- " prefix for each point)
+   - Keep each bullet point concise (10-15 words maximum)
+   - Focus on key concepts, findings, or implications
+   - Use clear, direct language suitable for visual presentation
+   - Each sentence should have 2-4 bullet points
+
+🎯 PERFECT SCRIPT STRUCTURE (15 Sentences Total):
+
+**OPENING (Sentences 1-3): THE HOOK & CONTEXT**
+- Sentence 1: STRONG OPENING HOOK - Start with a compelling question, surprising fact, or bold statement that immediately captures attention. Reference the paper title and create intellectual curiosity. Examples: "What if [key problem] could be solved through [innovative approach]?" or "[Surprising statistic/claim] - this groundbreaking research by [authors] challenges our understanding of [field]."
+- Sentence 2: ESTABLISH CREDIBILITY & CONTEXT - Mention authors (full names if available) and their affiliation/institution. Set the research context, define the problem space, and explain why this research matters. Connect to the broader field or real-world implications.
+- Sentence 3: RESEARCH OBJECTIVE - Clearly state what this study aims to achieve. Use the introduction and abstract to identify the main research question or objective. Frame it as an important question that needs answering.
+
+**BODY - BACKGROUND & METHODOLOGY (Sentences 4-7): THE FOUNDATION**
+- Sentence 4: BACKGROUND CONTEXT - Provide necessary context from the background section. Explain existing knowledge, gaps in the field, or why this research is needed. Reference literature insights or theoretical framework.
+- Sentence 5: RESEARCH MOTIVATION - Explain what drove this research. What problem does it address? What limitations of previous work does it overcome? Use introduction and background sections.
+- Sentence 6: METHODOLOGY OVERVIEW - Describe the research approach, methods, or experimental design from the methodology section. Be specific about techniques, datasets, or procedures used. Reference methodology images naturally.
+- Sentence 7: METHODOLOGICAL DETAILS - Provide key methodological specifics: sample sizes, algorithms, experimental setup, data collection procedures, or analytical techniques. Reference methodology images to add authenticity.
+
+**BODY - RESULTS & FINDINGS (Sentences 8-11): THE EVIDENCE**
+- Sentence 8: KEY FINDING #1 - Present the first major finding or result with specific statistics, metrics, or data points. Use actual numbers from results section or tables. Reference results images naturally.
+- Sentence 9: KEY FINDING #2 - Present another significant finding with quantitative data. Include comparisons, improvements, or performance metrics. Use tables if relevant.
+- Sentence 10: COMPARATIVE ANALYSIS - Discuss how the results compare to previous work, benchmarks, or expectations. Include statistical significance, effect sizes, or performance improvements.
+- Sentence 11: ADDITIONAL INSIGHTS - Present nuanced findings, unexpected results, or interesting patterns. Use discussion section to interpret what these results mean.
+
+**BODY - DISCUSSION & IMPLICATIONS (Sentences 12-13): THE MEANING**
+- Sentence 12: INTERPRETATION - Explain what the findings mean from the discussion section. Discuss implications, why these results matter, or what they reveal about the research question.
+- Sentence 13: BROADER IMPACT - Connect findings to broader implications: field impact, practical applications, theoretical contributions, or real-world significance. Use discussion and conclusion sections.
+
+**CLOSING (Sentences 14-15): THE IMPACT**
+- Sentence 14: MAJOR CONTRIBUTIONS - Highlight the study's most significant contributions to the field. What does this research add that wasn't known before? What are the key takeaways? Use conclusion section.
+- Sentence 15: POWERFUL CONCLUSION - Create a memorable closing that explains why this research matters and motivates exploration of the full study. End with impact, future possibilities, or the broader significance. Make it resonate emotionally and intellectually. DO NOT end with just data - end with meaning and inspiration.
+
+🎯 QUALITY STANDARDS:
+• SENTENCE LENGTH: Each sentence should be 15-25 words (normal range). Avoid sentences exceeding 30 words. Maintain consistent length for better narration flow.
+• TOTAL WORD COUNT: ENTIRE script must be 275-350 words across all 15 sentences.
+• OPENING QUALITY: First sentence MUST be a compelling hook that grabs attention immediately. Never start with generic phrases like "This research" or "In this paper."
+• TRANSITIONS: Use smooth connecting phrases between sentences (e.g., "Building on this foundation...", "These findings reveal...", "Furthermore...", "Critically...").
+• SPECIFICITY: Include actual numbers, statistics, percentages, sample sizes, and specific details from the research. Avoid vague language.
+• VARIETY: Use varied sentence structures and vocabulary. Avoid repetition of phrases or concepts.
+• INFORMATION COMPLETENESS: Extract from ALL 7 sections (abstract, introduction, background, methodology, results, discussion, conclusion). Balance information density across sentences.
+• PROFESSIONAL TONE: Write in a sophisticated, academic yet accessible tone. Sound like a professional narrator, not generic AI.
+• FIGURE USAGE: Reference methodology and results images naturally without mentioning figure numbers. Describe what they show as part of the narrative.
 
 Paper Data:
 ${JSON.stringify(jsonData, null, 2)}
@@ -358,46 +418,117 @@ CRITICAL REQUIREMENTS:
 3. Each sentence should cover different aspects, findings, or implications from the research
 4. ABSOLUTE REQUIREMENT: NEVER mention "Figure 1", "Figure 2", "Fig. 1", "Fig. 2", or any figure numbers. Instead, describe what the figures show naturally (e.g., "The experimental setup demonstrates...", "The results reveal a 15% improvement...", "Performance metrics show...") without referencing figure numbers.
 5. Generate THREE DISTINCTLY DIFFERENT script variations. Each script should:
-   - Have a different opening approach/hook
+   - Have a different opening approach/hook (different hook styles: question vs. statement vs. statistic)
    - Emphasize different aspects of the research
    - Use varied narrative styles
    - Present information in different orders/structures
+6. OPENING PERFECTION: The first sentence of EACH script must be a compelling hook. Avoid generic starts. Make it engaging and attention-grabbing.
+7. CLOSING PERFECTION: The final sentence of EACH script must be powerful, memorable, and inspiring. End with impact and meaning, not just data.
+8. STRUCTURE ADHERENCE: Follow the exact structure outlined above (Opening 1-3, Background/Methodology 4-7, Results 8-11, Discussion 12-13, Closing 14-15) for each of the 3 scripts.
 
 ABSOLUTE REQUIREMENT: NEVER mention "Figure 1", "Figure 2", "Fig. 1", "Fig. 2", or any figure numbers in any of the scripts. Instead, describe what the figures show naturally (e.g., "The experimental setup demonstrates...", "The results reveal a 15% improvement...", "Performance metrics show...") without referencing figure numbers.
 
 Format your response EXACTLY as follows (no other text):
 
 SCRIPT 1:
-[Your first script text here]
+SCENE 1:
+SCRIPT: [Sentence 1 text for speaking/subtitles]
+PRESENTATION:
+- [Bullet point 1 for slide]
+- [Bullet point 2 for slide]
+- [Bullet point 3 for slide]
+
+SCENE 2:
+SCRIPT: [Sentence 2 text for speaking/subtitles]
+PRESENTATION:
+- [Bullet point 1 for slide]
+- [Bullet point 2 for slide]
+- [Bullet point 3 for slide]
+
+[Continue for all 15 scenes...]
 
 SCRIPT 2:
-[Your second script text here]
+SCENE 1:
+SCRIPT: [Sentence 1 text for speaking/subtitles]
+PRESENTATION:
+- [Bullet point 1 for slide]
+- [Bullet point 2 for slide]
+- [Bullet point 3 for slide]
+
+[Continue for all 15 scenes...]
 
 SCRIPT 3:
-[Your third script text here]`
+SCENE 1:
+SCRIPT: [Sentence 1 text for speaking/subtitles]
+PRESENTATION:
+- [Bullet point 1 for slide]
+- [Bullet point 2 for slide]
+- [Bullet point 3 for slide]
+
+[Continue for all 15 scenes...]`
 
       const result = await model.generateContent(prompt)
       const response = await result.response
       const output = response.text()
 
-      // Parse the 3 scripts from the response
+      // Parse the 3 scripts from the response with presentation_text
       const scripts: ScriptData[] = []
       const scriptRegex = /SCRIPT (\d+):\s*([\s\S]*?)(?=SCRIPT \d+:|$)/g
       let match
       
-      while ((match = scriptRegex.exec(output)) !== null) {
-        const scriptText = match[2].trim()
-        const sentences = this.splitIntoSentences(scriptText)
+      while ((match = scriptRegex.exec(output)) !== null) {        const scriptContent = match[2].trim()
         
-        scripts.push({
-          script: scriptText,
-          sentences,
-          version: 1,
-          generatedAt: new Date().toISOString()
-        })
+        // Parse each scene to extract script and presentation_text
+        const scenes: Sentence[] = []
+        let scriptTextParts: string[] = []
+        
+        // Parse scenes with format: SCENE N: SCRIPT: ... PRESENTATION: ...
+        const sceneRegex = /SCENE (\d+):\s*SCRIPT:\s*([^\n]+(?:\n(?!PRESENTATION:)[^\n]+)*)\s*PRESENTATION:\s*((?:-\s*[^\n]+\s*)+)/g
+        let sceneMatch
+        
+        while ((sceneMatch = sceneRegex.exec(scriptContent)) !== null) {
+          const sceneNum = parseInt(sceneMatch[1], 10)
+          const scriptSentence = sceneMatch[2].trim()
+          const presentationSection = sceneMatch[3].trim()
+          
+          // Parse bullet points from presentation section
+          const bulletPoints = presentationSection
+            .split(/\n/)
+            .map(line => line.trim())
+            .filter(line => line.startsWith('- '))
+            .map(line => line.substring(2).trim())
+            .filter(line => line.length > 0)
+          
+          scriptTextParts.push(scriptSentence)
+          
+          scenes.push({
+            id: this.generateSentenceId(sceneNum - 1),
+            text: scriptSentence,
+            presentation_text: bulletPoints.length > 0 ? bulletPoints : undefined,
+            approved: false
+          })
+        }
+        
+        // Fallback: If new format parsing fails, try old format
+        if (scenes.length === 0) {
+          const sentences = this.splitIntoSentences(scriptContent)
+          scripts.push({
+            script: scriptContent,
+            sentences,
+            version: 1,
+            generatedAt: new Date().toISOString()
+          })
+        } else {
+          scripts.push({
+            script: scriptTextParts.join(' '),
+            sentences: scenes,
+            version: 1,
+            generatedAt: new Date().toISOString()
+          })
+        }
       }
 
-      // If parsing fails, try to split by double newlines or other patterns
+      // If parsing fails completely, try to split by double newlines or other patterns
       if (scripts.length === 0) {
         const parts = output.split(/SCRIPT \d+:/).filter(p => p.trim())
         
@@ -460,7 +591,7 @@ IMPORTANT: The images/figures are categorized to help you create more authentic 
 - METHODOLOGY images: Use these when describing research methods, experimental setup, procedures, algorithms, or data collection processes
 - RESULTS images: Use these when describing findings, outcomes, performance metrics, or experimental results
 
-Your job is to analyze this JSON and produce a refined, engaging 90-second narration script (exactly 15 sentences, 220–250 words) that:
+Your job is to analyze this JSON and produce a refined, engaging 90-second narration script (exactly 15 sentences, TOTAL word count between 275-350 words for the entire script) that:
 • Creates a compelling narrative that makes readers want to explore the full research
 • MUST extract and incorporate information from ALL sections (abstract, introduction, background, methodology, results, discussion, conclusion)
 • MUST use specific details, statistics, methodologies, and results from EACH section
@@ -479,10 +610,43 @@ Your job is to analyze this JSON and produce a refined, engaging 90-second narra
 • CRITICAL: Each of the 15 sentences must be UNIQUE and DISTINCT - never repeat the same sentence or similar phrasing
 • CRITICAL: Do NOT skip any section - ensure information from all 7 sections is represented in the script
 
-🎯 Script Guidelines
-• Opening (5–10 sec): Use ABSTRACT and INTRODUCTION sections. Introduce topic using the title and mention the authors' names. Set the context for the research using background information.
-• Body (60 sec): Use BACKGROUND, METHODOLOGY, RESULTS, and DISCUSSION sections. Describe motivation, background, methods, and key findings in a flowing, narrative tone. Include specific details and insights from each section. When describing methods, incorporate insights from methodology images/figures by describing what they show naturally (e.g., "The experimental setup includes...", "The methodology demonstrates...") - NEVER mention figure numbers. When describing results, incorporate insights from results images/figures by describing the findings naturally (e.g., "The results reveal a 15% improvement...", "Performance metrics show...") - NEVER mention figure numbers. Include statistics and data from tables.
-• Closing (10–15 sec): Use CONCLUSION and DISCUSSION sections. Conclude with impact, implications, or next steps.
+🎯 PERFECT SCRIPT STRUCTURE (15 Sentences Total):
+
+**OPENING (Sentences 1-3): THE HOOK & CONTEXT**
+- Sentence 1: STRONG OPENING HOOK - Start with a compelling question, surprising fact, or bold statement that immediately captures attention. Reference the paper title and create intellectual curiosity. Examples: "What if [key problem] could be solved through [innovative approach]?" or "[Surprising statistic/claim] - this groundbreaking research by [authors] challenges our understanding of [field]."
+- Sentence 2: ESTABLISH CREDIBILITY & CONTEXT - Mention authors (full names if available) and their affiliation/institution. Set the research context, define the problem space, and explain why this research matters. Connect to the broader field or real-world implications.
+- Sentence 3: RESEARCH OBJECTIVE - Clearly state what this study aims to achieve. Use the introduction and abstract to identify the main research question or objective. Frame it as an important question that needs answering.
+
+**BODY - BACKGROUND & METHODOLOGY (Sentences 4-7): THE FOUNDATION**
+- Sentence 4: BACKGROUND CONTEXT - Provide necessary context from the background section. Explain existing knowledge, gaps in the field, or why this research is needed. Reference literature insights or theoretical framework.
+- Sentence 5: RESEARCH MOTIVATION - Explain what drove this research. What problem does it address? What limitations of previous work does it overcome? Use introduction and background sections.
+- Sentence 6: METHODOLOGY OVERVIEW - Describe the research approach, methods, or experimental design from the methodology section. Be specific about techniques, datasets, or procedures used. Reference methodology images naturally.
+- Sentence 7: METHODOLOGICAL DETAILS - Provide key methodological specifics: sample sizes, algorithms, experimental setup, data collection procedures, or analytical techniques. Reference methodology images to add authenticity.
+
+**BODY - RESULTS & FINDINGS (Sentences 8-11): THE EVIDENCE**
+- Sentence 8: KEY FINDING #1 - Present the first major finding or result with specific statistics, metrics, or data points. Use actual numbers from results section or tables. Reference results images naturally.
+- Sentence 9: KEY FINDING #2 - Present another significant finding with quantitative data. Include comparisons, improvements, or performance metrics. Use tables if relevant.
+- Sentence 10: COMPARATIVE ANALYSIS - Discuss how the results compare to previous work, benchmarks, or expectations. Include statistical significance, effect sizes, or performance improvements.
+- Sentence 11: ADDITIONAL INSIGHTS - Present nuanced findings, unexpected results, or interesting patterns. Use discussion section to interpret what these results mean.
+
+**BODY - DISCUSSION & IMPLICATIONS (Sentences 12-13): THE MEANING**
+- Sentence 12: INTERPRETATION - Explain what the findings mean from the discussion section. Discuss implications, why these results matter, or what they reveal about the research question.
+- Sentence 13: BROADER IMPACT - Connect findings to broader implications: field impact, practical applications, theoretical contributions, or real-world significance. Use discussion and conclusion sections.
+
+**CLOSING (Sentences 14-15): THE IMPACT**
+- Sentence 14: MAJOR CONTRIBUTIONS - Highlight the study's most significant contributions to the field. What does this research add that wasn't known before? What are the key takeaways? Use conclusion section.
+- Sentence 15: POWERFUL CONCLUSION - Create a memorable closing that explains why this research matters and motivates exploration of the full study. End with impact, future possibilities, or the broader significance. Make it resonate emotionally and intellectually. DO NOT end with just data - end with meaning and inspiration.
+
+🎯 QUALITY STANDARDS:
+• SENTENCE LENGTH: Each sentence should be 15-25 words (normal range). Avoid sentences exceeding 30 words. Maintain consistent length for better narration flow.
+• TOTAL WORD COUNT: ENTIRE script must be 275-350 words across all 15 sentences.
+• OPENING QUALITY: First sentence MUST be a compelling hook that grabs attention immediately. Never start with generic phrases like "This research" or "In this paper."
+• TRANSITIONS: Use smooth connecting phrases between sentences (e.g., "Building on this foundation...", "These findings reveal...", "Furthermore...", "Critically...").
+• SPECIFICITY: Include actual numbers, statistics, percentages, sample sizes, and specific details from the research. Avoid vague language.
+• VARIETY: Use varied sentence structures and vocabulary. Avoid repetition of phrases or concepts.
+• INFORMATION COMPLETENESS: Extract from ALL 7 sections (abstract, introduction, background, methodology, results, discussion, conclusion). Balance information density across sentences.
+• PROFESSIONAL TONE: Write in a sophisticated, academic yet accessible tone. Sound like a professional narrator, not generic AI.
+• FIGURE USAGE: Reference methodology and results images naturally without mentioning figure numbers. Describe what they show as part of the narrative.
 
 COMPLETE PAPER DATA (USE ALL SECTIONS):
 ${JSON.stringify(jsonData, null, 2)}
@@ -506,14 +670,72 @@ CRITICAL: Generate EXACTLY 15 UNIQUE sentences. Each sentence must be completely
 
 ABSOLUTE REQUIREMENT: NEVER mention "Figure 1", "Figure 2", "Fig. 1", "Fig. 2", or any figure numbers. Instead, describe what the figures show naturally (e.g., "The experimental setup demonstrates...", "The results reveal a 15% improvement...", "Performance metrics show...") without referencing figure numbers.
 
-Generate only the script text, no additional commentary or formatting.`
+Format your response EXACTLY as follows (no other text):
+
+SCENE 1:
+SCRIPT: [Sentence 1 text for speaking/subtitles]
+PRESENTATION:
+- [Bullet point 1 for slide]
+- [Bullet point 2 for slide]
+- [Bullet point 3 for slide]
+
+SCENE 2:
+SCRIPT: [Sentence 2 text for speaking/subtitles]
+PRESENTATION:
+- [Bullet point 1 for slide]
+- [Bullet point 2 for slide]
+- [Bullet point 3 for slide]
+
+[Continue for all 15 scenes...]`
 
       const result = await model.generateContent(prompt)
       const response = await result.response
-      const script = response.text()
+      const output = response.text()
 
-      // Split the script into sentences
-      const sentences = this.splitIntoSentences(script)
+      // Parse scenes with script and presentation_text
+      const scenes: Sentence[] = []
+      let scriptTextParts: string[] = []
+      
+      // Parse scenes with format: SCENE N: SCRIPT: ... PRESENTATION: ...
+      // Updated regex to handle multi-line script text properly
+      const sceneRegex = /SCENE (\d+):\s*SCRIPT:\s*([\s\S]*?)\s*PRESENTATION:\s*((?:-\s*[^\n]+\s*)+)/g
+      let sceneMatch
+      
+      while ((sceneMatch = sceneRegex.exec(output)) !== null) {
+        const sceneNum = parseInt(sceneMatch[1], 10)
+        const scriptSentence = sceneMatch[2].trim()
+        const presentationSection = sceneMatch[3].trim()
+        
+        // Parse bullet points from presentation section
+        const bulletPoints = presentationSection
+          .split(/\n/)
+          .map(line => line.trim())
+          .filter(line => line.startsWith('- '))
+          .map(line => line.substring(2).trim())
+          .filter(line => line.length > 0)
+        
+        scriptTextParts.push(scriptSentence)
+        
+        scenes.push({
+          id: this.generateSentenceId(sceneNum - 1),
+          text: scriptSentence,
+          presentation_text: bulletPoints.length > 0 ? bulletPoints : undefined,
+          approved: false
+        })
+      }
+      
+      // Fallback: If new format parsing fails, use old format
+      let sentences: Sentence[]
+      let script: string
+      
+      if (scenes.length === 0) {
+        // Old format fallback
+        sentences = this.splitIntoSentences(output)
+        script = output
+      } else {
+        sentences = scenes
+        script = scriptTextParts.join(' ')
+      }
 
       return {
         script,
@@ -560,7 +782,7 @@ You will receive a JSON object containing:
 • metadata: title, authors, keywords, etc.
 • sections: abstract, introduction, background, methodology, discussion, results, conclusion
 
-Your job is to analyze this JSON and produce a refined, engaging 90-second narration script (exactly 15 sentences, 220–250 words) that:
+Your job is to analyze this JSON and produce a refined, engaging 90-second narration script (exactly 15 sentences, TOTAL word count between 275-350 words for the entire script) that:
 • Creates a compelling narrative that makes readers want to explore the full research
 • Covers ALL significant data, findings, and insights from the entire JSON content
 • Uses specific details, statistics, methodologies, and results from the research
@@ -573,12 +795,41 @@ Your job is to analyze this JSON and produce a refined, engaging 90-second narra
 • NARRATIVE ARC: Build from problem identification through methodology to results and implications
 • CRITICAL: Each of the 15 sentences must be UNIQUE and DISTINCT - never repeat the same sentence or similar phrasing
 
-🎯 Script Guidelines
-• Opening (3 sentences): Create a compelling hook that introduces the research problem, establishes the authors' credibility, and sets up why this study matters. Use specific details that immediately capture attention.
-• Body (10 sentences): Cover methodology, key findings, data analysis, results, and implications using precise details, statistics, and specific outcomes. Build the narrative progressively with smooth transitions.
-• Closing (2 sentences): 
-  - Sentence 14: Highlight the study's major contributions and implications for the field
-  - Sentence 15: Create a powerful conclusion that explains why this research matters and motivates readers to explore the full study
+🎯 PERFECT SCRIPT STRUCTURE (15 Sentences Total):
+
+**OPENING (Sentences 1-3): THE HOOK & CONTEXT**
+- Sentence 1: STRONG OPENING HOOK - Start with a compelling question, surprising fact, or bold statement that immediately captures attention. Reference the paper title and create intellectual curiosity. NEVER start with generic phrases like "This research" or "In this paper."
+- Sentence 2: ESTABLISH CREDIBILITY & CONTEXT - Mention authors (full names if available) and their affiliation/institution. Set the research context, define the problem space, and explain why this research matters.
+- Sentence 3: RESEARCH OBJECTIVE - Clearly state what this study aims to achieve. Frame it as an important question that needs answering.
+
+**BODY - BACKGROUND & METHODOLOGY (Sentences 4-7): THE FOUNDATION**
+- Sentence 4: BACKGROUND CONTEXT - Provide necessary context from the background section. Explain existing knowledge, gaps in the field, or why this research is needed.
+- Sentence 5: RESEARCH MOTIVATION - Explain what drove this research. What problem does it address? What limitations of previous work does it overcome?
+- Sentence 6: METHODOLOGY OVERVIEW - Describe the research approach, methods, or experimental design. Be specific about techniques, datasets, or procedures used.
+- Sentence 7: METHODOLOGICAL DETAILS - Provide key methodological specifics: sample sizes, algorithms, experimental setup, data collection procedures, or analytical techniques.
+
+**BODY - RESULTS & FINDINGS (Sentences 8-11): THE EVIDENCE**
+- Sentence 8: KEY FINDING #1 - Present the first major finding or result with specific statistics, metrics, or data points. Use actual numbers from results section or tables.
+- Sentence 9: KEY FINDING #2 - Present another significant finding with quantitative data. Include comparisons, improvements, or performance metrics.
+- Sentence 10: COMPARATIVE ANALYSIS - Discuss how the results compare to previous work, benchmarks, or expectations. Include statistical significance, effect sizes, or performance improvements.
+- Sentence 11: ADDITIONAL INSIGHTS - Present nuanced findings, unexpected results, or interesting patterns.
+
+**BODY - DISCUSSION & IMPLICATIONS (Sentences 12-13): THE MEANING**
+- Sentence 12: INTERPRETATION - Explain what the findings mean. Discuss implications, why these results matter, or what they reveal about the research question.
+- Sentence 13: BROADER IMPACT - Connect findings to broader implications: field impact, practical applications, theoretical contributions, or real-world significance.
+
+**CLOSING (Sentences 14-15): THE IMPACT**
+- Sentence 14: MAJOR CONTRIBUTIONS - Highlight the study's most significant contributions to the field. What does this research add that wasn't known before?
+- Sentence 15: POWERFUL CONCLUSION - Create a memorable closing that explains why this research matters and motivates exploration of the full study. End with impact, future possibilities, or the broader significance. DO NOT end with just data - end with meaning and inspiration.
+
+🎯 QUALITY STANDARDS:
+• SENTENCE LENGTH: Each sentence should be 15-25 words (normal range). Avoid sentences exceeding 30 words.
+• TOTAL WORD COUNT: ENTIRE script must be 275-350 words across all 15 sentences.
+• OPENING QUALITY: First sentence MUST be a compelling hook that grabs attention immediately.
+• TRANSITIONS: Use smooth connecting phrases between sentences (e.g., "Building on this foundation...", "These findings reveal...", "Furthermore...").
+• SPECIFICITY: Include actual numbers, statistics, percentages, sample sizes, and specific details from the research.
+• VARIETY: Use varied sentence structures and vocabulary. Avoid repetition.
+• PROFESSIONAL TONE: Write in a sophisticated, academic yet accessible tone.
 
 CRITICAL REQUIREMENTS:
 • Generate EXACTLY 15 UNIQUE sentences - each sentence must be completely different from all others
@@ -602,18 +853,41 @@ ${JSON.stringify(jsonData, null, 2)}
 
 Generate a complete script that maintains the same structure and flow as the original. Focus on creating natural, engaging content that accurately represents the research.
 
-IMPORTANT CLOSING REQUIREMENTS:
-• Sentence 14 must highlight the study's major contributions and implications for the field
-• Sentence 15 must be a powerful conclusion that explains why this research matters and motivates readers to explore the full study
-• The final sentence should NOT end with just data points or findings
-• The final sentence should explain the broader significance and create intellectual curiosity
-• End with impact, not just information
+🎯 PERFECT SCRIPT STRUCTURE (15 Sentences Total):
 
-NARRATIVE FLOW REQUIREMENTS:
-• SENTENCE DENSITY: Balance information across sentences - don't overload individual sentences
-• TRANSITIONS: Create smooth bridges between findings and implications (e.g., "These findings suggest...", "Building on these results...", "This evidence indicates...")
-• CONCLUSION EMPHASIS: Make sentences 14-15 the most powerful and memorable - they should resonate with readers
-• PROGRESSIVE BUILDING: Each sentence should build upon the previous one, creating a logical flow from methodology → findings → implications → significance
+**OPENING (Sentences 1-3): THE HOOK & CONTEXT**
+- Sentence 1: STRONG OPENING HOOK - Start with a compelling question, surprising fact, or bold statement that immediately captures attention. Reference the paper title and create intellectual curiosity. NEVER start with generic phrases like "This research" or "In this paper."
+- Sentence 2: ESTABLISH CREDIBILITY & CONTEXT - Mention authors (full names if available) and their affiliation/institution. Set the research context, define the problem space, and explain why this research matters.
+- Sentence 3: RESEARCH OBJECTIVE - Clearly state what this study aims to achieve. Frame it as an important question that needs answering.
+
+**BODY - BACKGROUND & METHODOLOGY (Sentences 4-7): THE FOUNDATION**
+- Sentence 4: BACKGROUND CONTEXT - Provide necessary context from the background section. Explain existing knowledge, gaps in the field, or why this research is needed.
+- Sentence 5: RESEARCH MOTIVATION - Explain what drove this research. What problem does it address? What limitations of previous work does it overcome?
+- Sentence 6: METHODOLOGY OVERVIEW - Describe the research approach, methods, or experimental design. Be specific about techniques, datasets, or procedures used.
+- Sentence 7: METHODOLOGICAL DETAILS - Provide key methodological specifics: sample sizes, algorithms, experimental setup, data collection procedures, or analytical techniques.
+
+**BODY - RESULTS & FINDINGS (Sentences 8-11): THE EVIDENCE**
+- Sentence 8: KEY FINDING #1 - Present the first major finding or result with specific statistics, metrics, or data points. Use actual numbers from results section or tables.
+- Sentence 9: KEY FINDING #2 - Present another significant finding with quantitative data. Include comparisons, improvements, or performance metrics.
+- Sentence 10: COMPARATIVE ANALYSIS - Discuss how the results compare to previous work, benchmarks, or expectations. Include statistical significance, effect sizes, or performance improvements.
+- Sentence 11: ADDITIONAL INSIGHTS - Present nuanced findings, unexpected results, or interesting patterns.
+
+**BODY - DISCUSSION & IMPLICATIONS (Sentences 12-13): THE MEANING**
+- Sentence 12: INTERPRETATION - Explain what the findings mean. Discuss implications, why these results matter, or what they reveal about the research question.
+- Sentence 13: BROADER IMPACT - Connect findings to broader implications: field impact, practical applications, theoretical contributions, or real-world significance.
+
+**CLOSING (Sentences 14-15): THE IMPACT**
+- Sentence 14: MAJOR CONTRIBUTIONS - Highlight the study's most significant contributions to the field. What does this research add that wasn't known before?
+- Sentence 15: POWERFUL CONCLUSION - Create a memorable closing that explains why this research matters and motivates exploration of the full study. End with impact, future possibilities, or the broader significance. DO NOT end with just data - end with meaning and inspiration.
+
+🎯 QUALITY STANDARDS:
+• SENTENCE LENGTH: Each sentence should be 15-25 words (normal range). Avoid sentences exceeding 30 words.
+• TOTAL WORD COUNT: ENTIRE script must be 275-350 words across all 15 sentences.
+• OPENING QUALITY: First sentence MUST be a compelling hook that grabs attention immediately.
+• TRANSITIONS: Use smooth connecting phrases between sentences (e.g., "Building on this foundation...", "These findings reveal...", "Furthermore...").
+• SPECIFICITY: Include actual numbers, statistics, percentages, sample sizes, and specific details from the research.
+• VARIETY: Use varied sentence structures and vocabulary. Avoid repetition.
+• PROFESSIONAL TONE: Write in a sophisticated, academic yet accessible tone.
 
 Generate only the script text, no additional commentary or formatting.`
 
@@ -692,7 +966,7 @@ IMPORTANT: The images/figures are categorized to help you create more authentic 
 - METHODOLOGY images: Use these when describing research methods, experimental setup, procedures, algorithms, or data collection processes
 - RESULTS images: Use these when describing findings, outcomes, performance metrics, or experimental results
 
-Your job is to analyze this JSON and produce a refined, engaging 90-second narration script (exactly 15 sentences, 220–250 words) that:
+Your job is to analyze this JSON and produce a refined, engaging 90-second narration script (exactly 15 sentences, TOTAL word count between 275-350 words for the entire script) that:
 • Creates a compelling narrative that makes readers want to explore the full research
 • MUST extract and incorporate information from ALL sections (abstract, introduction, background, methodology, results, discussion, conclusion)
 • MUST use specific details, statistics, methodologies, and results from EACH section
@@ -711,10 +985,43 @@ Your job is to analyze this JSON and produce a refined, engaging 90-second narra
 • CRITICAL: Each of the 15 sentences must be UNIQUE and DISTINCT - never repeat the same sentence or similar phrasing
 • CRITICAL: Do NOT skip any section - ensure information from all 7 sections is represented in the script
 
-🎯 Script Guidelines
-• Opening (5–10 sec): Use ABSTRACT and INTRODUCTION sections. Introduce topic using the title and mention the authors' names. Set the context for the research using background information.
-• Body (60 sec): Use BACKGROUND, METHODOLOGY, RESULTS, and DISCUSSION sections. Describe motivation, background, methods, and key findings in a flowing, narrative tone. Include specific details and insights from each section. When describing methods, incorporate insights from methodology images/figures by describing what they show naturally (e.g., "The experimental setup includes...", "The methodology demonstrates...") - NEVER mention figure numbers. When describing results, incorporate insights from results images/figures by describing the findings naturally (e.g., "The results reveal a 15% improvement...", "Performance metrics show...") - NEVER mention figure numbers. Include statistics and data from tables.
-• Closing (10–15 sec): Use CONCLUSION and DISCUSSION sections. Conclude with impact, implications, or next steps.
+🎯 PERFECT SCRIPT STRUCTURE (15 Sentences Total):
+
+**OPENING (Sentences 1-3): THE HOOK & CONTEXT**
+- Sentence 1: STRONG OPENING HOOK - Start with a compelling question, surprising fact, or bold statement that immediately captures attention. Reference the paper title and create intellectual curiosity. Examples: "What if [key problem] could be solved through [innovative approach]?" or "[Surprising statistic/claim] - this groundbreaking research by [authors] challenges our understanding of [field]."
+- Sentence 2: ESTABLISH CREDIBILITY & CONTEXT - Mention authors (full names if available) and their affiliation/institution. Set the research context, define the problem space, and explain why this research matters. Connect to the broader field or real-world implications.
+- Sentence 3: RESEARCH OBJECTIVE - Clearly state what this study aims to achieve. Use the introduction and abstract to identify the main research question or objective. Frame it as an important question that needs answering.
+
+**BODY - BACKGROUND & METHODOLOGY (Sentences 4-7): THE FOUNDATION**
+- Sentence 4: BACKGROUND CONTEXT - Provide necessary context from the background section. Explain existing knowledge, gaps in the field, or why this research is needed. Reference literature insights or theoretical framework.
+- Sentence 5: RESEARCH MOTIVATION - Explain what drove this research. What problem does it address? What limitations of previous work does it overcome? Use introduction and background sections.
+- Sentence 6: METHODOLOGY OVERVIEW - Describe the research approach, methods, or experimental design from the methodology section. Be specific about techniques, datasets, or procedures used. Reference methodology images naturally.
+- Sentence 7: METHODOLOGICAL DETAILS - Provide key methodological specifics: sample sizes, algorithms, experimental setup, data collection procedures, or analytical techniques. Reference methodology images to add authenticity.
+
+**BODY - RESULTS & FINDINGS (Sentences 8-11): THE EVIDENCE**
+- Sentence 8: KEY FINDING #1 - Present the first major finding or result with specific statistics, metrics, or data points. Use actual numbers from results section or tables. Reference results images naturally.
+- Sentence 9: KEY FINDING #2 - Present another significant finding with quantitative data. Include comparisons, improvements, or performance metrics. Use tables if relevant.
+- Sentence 10: COMPARATIVE ANALYSIS - Discuss how the results compare to previous work, benchmarks, or expectations. Include statistical significance, effect sizes, or performance improvements.
+- Sentence 11: ADDITIONAL INSIGHTS - Present nuanced findings, unexpected results, or interesting patterns. Use discussion section to interpret what these results mean.
+
+**BODY - DISCUSSION & IMPLICATIONS (Sentences 12-13): THE MEANING**
+- Sentence 12: INTERPRETATION - Explain what the findings mean from the discussion section. Discuss implications, why these results matter, or what they reveal about the research question.
+- Sentence 13: BROADER IMPACT - Connect findings to broader implications: field impact, practical applications, theoretical contributions, or real-world significance. Use discussion and conclusion sections.
+
+**CLOSING (Sentences 14-15): THE IMPACT**
+- Sentence 14: MAJOR CONTRIBUTIONS - Highlight the study's most significant contributions to the field. What does this research add that wasn't known before? What are the key takeaways? Use conclusion section.
+- Sentence 15: POWERFUL CONCLUSION - Create a memorable closing that explains why this research matters and motivates exploration of the full study. End with impact, future possibilities, or the broader significance. Make it resonate emotionally and intellectually. DO NOT end with just data - end with meaning and inspiration.
+
+🎯 QUALITY STANDARDS:
+• SENTENCE LENGTH: Each sentence should be 15-25 words (normal range). Avoid sentences exceeding 30 words. Maintain consistent length for better narration flow.
+• TOTAL WORD COUNT: ENTIRE script must be 275-350 words across all 15 sentences.
+• OPENING QUALITY: First sentence MUST be a compelling hook that grabs attention immediately. Never start with generic phrases like "This research" or "In this paper."
+• TRANSITIONS: Use smooth connecting phrases between sentences (e.g., "Building on this foundation...", "These findings reveal...", "Furthermore...", "Critically...").
+• SPECIFICITY: Include actual numbers, statistics, percentages, sample sizes, and specific details from the research. Avoid vague language.
+• VARIETY: Use varied sentence structures and vocabulary. Avoid repetition of phrases or concepts.
+• INFORMATION COMPLETENESS: Extract from ALL 7 sections (abstract, introduction, background, methodology, results, discussion, conclusion). Balance information density across sentences.
+• PROFESSIONAL TONE: Write in a sophisticated, academic yet accessible tone. Sound like a professional narrator, not generic AI.
+• FIGURE USAGE: Reference methodology and results images naturally without mentioning figure numbers. Describe what they show as part of the narrative.
 
 COMPLETE PAPER DATA (USE ALL SECTIONS):
 ${JSON.stringify(jsonData, null, 2)}
@@ -774,6 +1081,7 @@ Generate only the script text, no additional commentary or formatting.`
       sentences: scriptData.sentences.map(s => ({
         id: s.id,
         text: s.text,
+        presentation_text: s.presentation_text, // Include presentation_text in export
         approved: s.approved
       })),
       status: approvedSentences.length === scriptData.sentences.length ? 'approved' : 'draft',
@@ -791,6 +1099,75 @@ Generate only the script text, no additional commentary or formatting.`
     link.click()
     document.body.removeChild(link)
     URL.revokeObjectURL(url)
+  }
+
+  /**
+   * Generate bullet points (presentation text) for a single sentence using Gemini
+   * @param sentence - The sentence text to generate bullet points for
+   * @param context - Optional context (full script, paper title, research domain)
+   * @returns Array of bullet point strings (2-4 bullet points)
+   */
+  async generateBulletPoints(
+    sentence: string,
+    context?: {
+      fullScript?: string;
+      paperTitle?: string;
+      researchDomain?: string;
+    }
+  ): Promise<string[]> {
+    this.validateApiKey()
+
+    if (!this.genAI) {
+      throw new Error('Gemini API not initialized')
+    }
+
+    try {
+      const model = this.genAI.getGenerativeModel({ model: 'gemini-2.0-flash-exp' })
+
+      const contextInfo = context?.fullScript 
+        ? `\n\nContext from the full research paper:\n${context.fullScript.substring(0, 1000)}`
+        : context?.paperTitle
+        ? `\n\nResearch paper title: ${context.paperTitle}`
+        : ''
+
+      const prompt = `You are an expert at creating concise bullet points for academic presentation slides.
+
+Given the following sentence from a research paper, generate 2-4 concise bullet points that summarize the key concepts, findings, or implications.
+
+Sentence: "${sentence}"${contextInfo}
+
+Requirements:
+- Generate 2-4 bullet points (prefer 3 if appropriate)
+- Each bullet point should be 10-15 words maximum
+- Focus on key concepts, findings, or implications
+- Use clear, direct language suitable for visual presentation
+- Do NOT include bullet symbols (dashes or bullets) - just the text
+
+Format your response as a simple list, one bullet point per line, without any prefixes or bullets. Example:
+
+Key finding about methodology
+Important statistical result
+Research implication or contribution
+
+Return ONLY the bullet points, one per line, nothing else.`
+
+      const result = await model.generateContent(prompt)
+      const response = await result.response
+      const output = response.text()
+
+      // Parse bullet points from response (one per line, trim each line)
+      const bulletPoints = output
+        .split('\n')
+        .map(line => line.trim())
+        .filter(line => line.length > 0)
+        .slice(0, 4) // Max 4 bullet points
+
+      return bulletPoints.length > 0 ? bulletPoints : ['Key point from research']
+    } catch (error: any) {
+      console.error('Failed to generate bullet points:', error)
+      // Return a fallback bullet point
+      return [sentence.substring(0, 60) + '...']
+    }
   }
 }
 

@@ -23,6 +23,7 @@ import {
   Image as ImageIcon,
   Zap,
   RotateCcw,
+  Save,
 } from 'lucide-react'
 import { toast } from 'sonner'
 import { videoAssemblyService, VideoSegment, AssemblyRequest } from '@/services/videoAssemblyService'
@@ -31,6 +32,7 @@ import { ScriptData, SentenceVisual, SentenceAudio } from '@/services/geminiServ
 interface VideoTimelineEditorProps {
   scriptData: ScriptData | null
   onExport?: (videoUrl: string, videoBase64: string) => void
+  onVideoExport?: (videoUrl: string, videoBase64: string) => void
   onVisualUpdate?: (sentenceId: string, visual: SentenceVisual) => void
   onAudioUpdate?: (sentenceId: string, audio: SentenceAudio) => void
   onVisualApprove?: (sentenceId: string) => void
@@ -42,7 +44,9 @@ interface VideoTimelineEditorProps {
 export function VideoTimelineEditor({
   scriptData,
   onExport,
+  onVideoExport,
   onVisualUpdate,
+  onAudioUpdate,
   // Removed unused prop
   onVisualApprove,
   onAudioApprove,
@@ -54,6 +58,7 @@ export function VideoTimelineEditor({
   const [musicVolume, setMusicVolume] = useState<number>(0.15) // Default 15% for background music
   const [isAssembling, setIsAssembling] = useState(false)
   const [isPreviewing, setIsPreviewing] = useState(false)
+  const [generatingAudioFor, setGeneratingAudioFor] = useState<string | null>(null) // Track which sentence is generating audio
   const [assembledVideo, setAssembledVideo] = useState<{
     videoUrl: string
     videoBase64: string
@@ -67,12 +72,22 @@ export function VideoTimelineEditor({
   const videoRef = useRef<HTMLVideoElement>(null)
   const [approvingIds, setApprovingIds] = useState<Set<string>>(new Set())
   const currentBlobUrlRef = useRef<string | null>(null)
-  const currentBlobRef = useRef<Blob | null>(null) // Keep blob object in memory to prevent GC
-  const isCreatingBlobRef = useRef<boolean>(false) // Prevent concurrent blob creation
+  const currentBlobRef = useRef<Blob | null>(null)
+  // CRITICAL: Track video src in state to ensure React re-renders when blob URL changes
+  // This prevents ERR_FILE_NOT_FOUND errors from stale blob URLs
+  const [videoSrc, setVideoSrc] = useState<string>('') // Keep blob object in memory to prevent GC
+  const isCreatingBlobRef = useRef<boolean>(false)
+  const scriptUpdateTimeoutRef = useRef<NodeJS.Timeout | null>(null) // Debounce script updates
 
   const safeRevokeBlob = (url?: string | null) => {
     if (!url) return
     try {
+      // CRITICAL: Clear state first to prevent video element from using stale blob URL
+      if (currentBlobUrlRef.current === url) {
+        setVideoSrc('')
+        currentBlobUrlRef.current = null
+      }
+      
       // If video element is currently pointing to this URL, clear it first
       if (videoRef.current) {
         const currentSrc = videoRef.current.src || videoRef.current.currentSrc
@@ -141,6 +156,7 @@ export function VideoTimelineEditor({
           console.error('❌ Invalid blob created from finalVideo base64')
           currentBlobUrlRef.current = null
           currentBlobRef.current = null
+          setVideoSrc('')
           setAssembledVideo(null)
           return
         }
@@ -151,6 +167,8 @@ export function VideoTimelineEditor({
         const videoUrl = URL.createObjectURL(videoBlob)
         // Track current blob URL for cleanup
         currentBlobUrlRef.current = videoUrl
+        // CRITICAL: Update state so video element re-renders with new blob URL
+        setVideoSrc(videoUrl)
         
         console.log('✅ Restored blob URL:', {
           blobUrl: videoUrl.substring(0, 50) + '...',
@@ -199,6 +217,7 @@ export function VideoTimelineEditor({
       } else if (finalVideo.videoUrl && !finalVideo.videoUrl.startsWith('blob:')) {
         // Use existing non-blob URL (HTTP/HTTPS)
         currentBlobUrlRef.current = null // Clear any blob URL
+        setVideoSrc(finalVideo.videoUrl) // Set non-blob URL in state
         setAssembledVideo({
           videoUrl: finalVideo.videoUrl,
           videoBase64: finalVideo.videoBase64 || '',
@@ -220,6 +239,7 @@ export function VideoTimelineEditor({
       // Clear if scriptData is cleared
       safeRevokeBlob(currentBlobUrlRef.current)
       currentBlobUrlRef.current = null
+      setVideoSrc('')
       setAssembledVideo(null)
       setIsApproved(false)
     }
@@ -274,6 +294,11 @@ export function VideoTimelineEditor({
         currentBlobRef.current = null
       }
       isCreatingBlobRef.current = false
+      // Cleanup script update timeout
+      if (scriptUpdateTimeoutRef.current) {
+        clearTimeout(scriptUpdateTimeoutRef.current)
+        scriptUpdateTimeoutRef.current = null
+      }
     }
   }, [assembledVideo?.videoBase64])
   
@@ -289,8 +314,8 @@ export function VideoTimelineEditor({
   const [autoAssemble, setAutoAssemble] = useState<boolean>(true)
   const [hasAutoAssembled, setHasAutoAssembled] = useState<boolean>(false)
   
-  // Per-segment editing (crop, transition, subtitle)
-  const [segmentEdits, setSegmentEdits] = useState<Record<string, {
+  // Per-segment editing (crop, transition, subtitle, presentation_text)
+  const [segmentEdits] = useState<Record<string, {
     startTime?: number
     endTime?: number
     transitionType?: 'fade' | 'slide' | 'dissolve' | 'none'
@@ -298,6 +323,21 @@ export function VideoTimelineEditor({
     subtitleSize?: number
     subtitleColor?: string
     subtitlePosition?: number
+    subtitleZoom?: number
+    presentationText?: string[] // Presentation text (bullet points) for slides
+  }>>({})
+  
+  // Saved segment edits - used when assembling
+  const [savedSegmentEdits, setSavedSegmentEdits] = useState<Record<string, {
+    startTime?: number
+    endTime?: number
+    transitionType?: 'fade' | 'slide' | 'dissolve' | 'none'
+    subtitleText?: string
+    subtitleSize?: number
+    subtitleColor?: string
+    subtitlePosition?: number
+    subtitleZoom?: number
+    presentationText?: string[]
   }>>({})
   
   // Track expanded segments
@@ -336,7 +376,7 @@ export function VideoTimelineEditor({
 
     console.log('🔍 getApprovedSegments - Checking', scriptData.sentences.length, 'sentences');
 
-    return scriptData.sentences.filter(s => {
+    const allApproved = scriptData.sentences.filter(s => {
       // SIMPLE CHECK: visual must be approved AND have videoUrl/imageUrl
       if (!s.visual) {
         return false
@@ -392,11 +432,42 @@ export function VideoTimelineEditor({
       
       return result
     })
-      .map(s => {
-        // Extract base64 from data URLs if present
+    
+    console.log('🔍 APPROVED SEGMENTS FILTER:', {
+      totalSentences: scriptData.sentences.length,
+      sentencesWithVisual: scriptData.sentences.filter(s => s.visual).length,
+      approvedCount: allApproved.length,
+      approvedIds: allApproved.map(s => s.id.substring(0, 8)),
+      allSentencesDetails: scriptData.sentences.map(s => ({
+        id: s.id.substring(0, 8),
+        hasVisual: !!s.visual,
+        approved: s.visual?.approved,
+        status: s.visual?.status,
+        hasVideoUrl: !!s.visual?.videoUrl,
+        hasImageUrl: !!s.visual?.imageUrl,
+        willBeIncluded: allApproved.includes(s),
+      }))
+    })
+    
+    return allApproved.map(s => {
+        // CRITICAL: Check videoBase64 field first (from database restore)
+        // This takes priority over blob URLs which can't be sent to backend
+        let videoBase64 = s.visual!.videoBase64
+        
         // Handle both videoUrl (VEO3) and imageUrl (GPT static videos)
         let videoUrl = s.visual!.videoUrl || ''
         let imageUrl = s.visual!.imageUrl || ''
+        
+        // If we have base64, we don't need URL for backend (URL is only for frontend display)
+        // If we have a blob URL, we MUST have base64 (from restore) - if not, log error
+        if (!videoBase64 && videoUrl.startsWith('blob:')) {
+          console.error('❌ Blob URL found but no videoBase64 - video was not properly restored from database:', s.id);
+        }
+        
+        // Check data URLs for base64 (if we don't already have it)
+        if (!videoBase64 && videoUrl.startsWith('data:')) {
+          videoBase64 = videoUrl.split(',')[1];
+        }
         
         // Promote imageUrl to videoUrl if:
         // 1) it is already a video source, or
@@ -424,14 +495,11 @@ export function VideoTimelineEditor({
           }
         }
         
-        const videoBase64 = videoUrl.startsWith('data:') 
-          ? videoUrl.split(',')[1] 
-          : undefined
-        
         // Also check imageUrl for base64 data
-        const imageBase64 = imageUrl.startsWith('data:') && !videoBase64
-          ? imageUrl.split(',')[1]
-          : undefined
+        let imageBase64 = s.visual!.imageBase64
+        if (!imageBase64 && imageUrl.startsWith('data:')) {
+          imageBase64 = imageUrl.split(',')[1]
+        }
         
         // Handle audio (optional) - automatically attach if available, even if not approved
         // When video is approved, use audio if it exists (auto-attach)
@@ -454,29 +522,70 @@ export function VideoTimelineEditor({
 
         // Use imageBase64 if videoBase64 is not available (GPT static videos)
         const finalVideoBase64 = videoBase64 || (imageBase64 && isLikelyVideoSource(imageUrl) ? imageBase64 : undefined)
-        const finalVideoUrl = finalVideoBase64 ? '' : (isLikelyVideoSource(videoUrl) ? videoUrl : '')
+        // Only use URL if it's HTTP/HTTPS (backend can access it) - never use blob URLs
+        const finalVideoUrl = finalVideoBase64 ? '' : (videoUrl && (videoUrl.startsWith('http://') || videoUrl.startsWith('https://')) ? videoUrl : '')
 
-        // Guard: skip if we still don't have a valid video source
-        if (!finalVideoBase64 && !isLikelyVideoSource(finalVideoUrl)) {
-          console.warn('⚠️ Skipping segment without valid video source:', {
+        // FIXED: If we have imageUrl but no videoUrl/base64, use imageUrl as videoUrl (backend will convert)
+        const finalVideoUrlForBackend = finalVideoUrl || (imageUrl && (imageUrl.startsWith('http://') || imageUrl.startsWith('https://')) ? imageUrl : '')
+        const finalVideoBase64ForBackend = finalVideoBase64 || imageBase64
+        
+        // Guard: skip if we still don't have ANY video/image source (base64 or URL)
+        if (!finalVideoBase64ForBackend && !finalVideoUrlForBackend) {
+          console.warn('⚠️ Skipping segment without ANY video/image source:', {
             sentenceId: s.id,
             videoUrl,
             imageUrl,
+            hasVideoBase64: !!videoBase64,
+            hasImageBase64: !!imageBase64,
+            finalVideoUrl,
+            finalVideoBase64,
           })
           return null as any
         }
 
-              // Get segment-specific edits
-              const edits = segmentEdits[s.id] || {}
+              // Get segment-specific edits - use saved edits if available, otherwise current edits
+              const edits = savedSegmentEdits[s.id] || segmentEdits[s.id] || {}
               const baseDuration = s.audio?.duration || 6
               const startTime = edits.startTime ?? 0
               const endTime = edits.endTime ?? baseDuration
               const actualDuration = Math.max(0.1, endTime - startTime) // Ensure positive duration
               
+              // Get subtitle text and presentation text from edits or saved values
+              // Priority: savedSegmentEdits > segmentEdits > visual.subtitleText > sentence.text
+              // CRITICAL: Always ensure subtitleText has a value (use sentence.text as fallback)
+              const subtitleText = edits.subtitleText !== undefined 
+                ? edits.subtitleText 
+                : (s.visual!.subtitleText !== undefined 
+                    ? s.visual!.subtitleText 
+                    : s.text)
+              const presentationText = edits.presentationText !== undefined 
+                ? edits.presentationText 
+                : s.presentation_text
+              
+              // Log text overlay data for debugging
+              if (subtitleText || (presentationText && presentationText.length > 0)) {
+                console.log(`📝 Segment ${s.id}: Text overlay data`, {
+                  subtitleText: subtitleText ? subtitleText.substring(0, 50) + '...' : 'NONE',
+                  hasPresentationText: !!(presentationText && presentationText.length > 0),
+                  presentationTextCount: presentationText?.length || 0,
+                  presentationTextPreview: presentationText?.slice(0, 2).map(t => t.substring(0, 30)),
+                  subtitleSettings: s.visual!.subtitleSettings ? {
+                    fontSize: edits.subtitleSize ?? s.visual!.subtitleSettings.fontSize,
+                    yPosition: edits.subtitlePosition ?? s.visual!.subtitleSettings.yPosition,
+                    zoom: edits.subtitleZoom ?? s.visual!.subtitleSettings.zoom,
+                  } : undefined,
+                  source: {
+                    fromEdits: !!edits.subtitleText || !!edits.presentationText,
+                    fromVisual: !!s.visual!.subtitleText,
+                    fromSentence: !edits.subtitleText && !s.visual!.subtitleText,
+                  }
+                })
+              }
+              
               return {
                 sentenceId: s.id,
-                videoUrl: finalVideoUrl, // Use URL only if not base64
-                videoBase64: finalVideoBase64,
+                videoUrl: finalVideoUrlForBackend, // Use URL (may be imageUrl converted)
+                videoBase64: finalVideoBase64ForBackend, // Use video or image base64
                 audioUrl,
                 audioBase64,
                 duration: actualDuration,
@@ -488,12 +597,23 @@ export function VideoTimelineEditor({
                   ...s.visual!.subtitleSettings,
                   fontSize: edits.subtitleSize ?? s.visual!.subtitleSettings.fontSize,
                   yPosition: edits.subtitlePosition ?? s.visual!.subtitleSettings.yPosition,
-                } : undefined,
+                  zoom: edits.subtitleZoom ?? s.visual!.subtitleSettings.zoom,
+                } : (edits.subtitleSize || edits.subtitlePosition || edits.subtitleZoom ? {
+                  fontSize: edits.subtitleSize ?? 42,
+                  yPosition: edits.subtitlePosition ?? 940,
+                  zoom: edits.subtitleZoom ?? 1.0,
+                } : undefined),
+                // CRITICAL: Include subtitle and presentation text - MUST be included for backend text overlay
+                // ALWAYS include subtitleText (use sentence.text as fallback if not explicitly set)
+                // ALWAYS include presentationText if it exists
+                // CRITICAL: ALWAYS include subtitleText - use sentence.text if nothing else available (sentence.text is the narration, so it MUST be shown as subtitles)
+                subtitleText: (subtitleText && subtitleText.trim().length > 0 ? subtitleText.trim() : null) || (s.text && s.text.trim().length > 0 ? s.text.trim() : null) || undefined,
+                presentationText: presentationText && Array.isArray(presentationText) && presentationText.length > 0 && presentationText.some(pt => pt && pt.trim().length > 0) ? presentationText.filter(pt => pt && pt.trim().length > 0) : undefined,
               } as VideoSegment
       })
       // Filter out any nulls from guard above
       .filter(Boolean) as VideoSegment[]
-  }, [scriptData, refreshKey, approvedVisualsDependency, segmentEdits])
+  }, [scriptData, refreshKey, approvedVisualsDependency, segmentEdits, savedSegmentEdits])
   
   // Removed unused function
   
@@ -698,32 +818,71 @@ export function VideoTimelineEditor({
       }
 
       // Ensure all segments have audio attached automatically if available
+      // Use saved edits if available, otherwise use current edits
       const segmentsWithAutoAudio = approvedSegments.map(segment => {
-        // If segment doesn't have audio but video is approved, try to find audio from sentence
-        if (!segment.audioUrl && !segment.audioBase64 && scriptData) {
-          const sentence = scriptData.sentences.find(s => s.id === segment.sentenceId)
-          if (sentence?.audio) {
-            // Auto-attach audio even if not explicitly approved
-            const audioUrlOrBase64 = sentence.audio.audioUrl || ''
-            if (audioUrlOrBase64.startsWith('data:')) {
-              return {
-                ...segment,
-                audioBase64: audioUrlOrBase64.split(',')[1]
-              }
-            } else if (audioUrlOrBase64) {
-              return {
-                ...segment,
-                audioUrl: audioUrlOrBase64
-              }
-            } else if (sentence.audio.audioBase64) {
-              return {
-                ...segment,
-                audioBase64: sentence.audio.audioBase64
-              }
-            }
+        // Apply saved edits to segment if available
+        const edits = savedSegmentEdits[segment.sentenceId] || segmentEdits[segment.sentenceId] || {}
+        const sentence = scriptData?.sentences.find(s => s.id === segment.sentenceId)
+        
+        // Update segment with saved edits
+        const updatedSegment = { ...segment }
+        
+        // Apply crop edits
+        if (edits.startTime !== undefined || edits.endTime !== undefined) {
+          updatedSegment.startTime = edits.startTime
+          updatedSegment.endTime = edits.endTime
+        }
+        
+        // Apply transition
+        if (edits.transitionType !== undefined) {
+          updatedSegment.transitionType = edits.transitionType
+        }
+        
+        // Apply subtitle settings
+        if (edits.subtitleSize !== undefined || edits.subtitlePosition !== undefined || edits.subtitleZoom !== undefined) {
+          updatedSegment.subtitleSettings = {
+            ...updatedSegment.subtitleSettings,
+            fontSize: edits.subtitleSize ?? updatedSegment.subtitleSettings?.fontSize ?? 42,
+            yPosition: edits.subtitlePosition ?? updatedSegment.subtitleSettings?.yPosition ?? 0,
+            zoom: edits.subtitleZoom ?? updatedSegment.subtitleSettings?.zoom ?? 1.0,
           }
         }
-        return segment
+        
+        // Apply subtitle text - CRITICAL: ALWAYS include subtitleText (use sentence.text as final fallback)
+        // The subtitleText is the narration text and MUST be shown as subtitles in the video
+        if (edits.subtitleText !== undefined) {
+          updatedSegment.subtitleText = edits.subtitleText.trim().length > 0 ? edits.subtitleText.trim() : (sentence?.text && sentence.text.trim().length > 0 ? sentence.text.trim() : undefined)
+        } else if (!updatedSegment.subtitleText || updatedSegment.subtitleText.trim().length === 0) {
+          // If no edits or empty, ensure we have subtitleText from sentence (it's the narration)
+          updatedSegment.subtitleText = sentence?.visual?.subtitleText || sentence?.text || undefined
+          if (updatedSegment.subtitleText) {
+            updatedSegment.subtitleText = updatedSegment.subtitleText.trim().length > 0 ? updatedSegment.subtitleText.trim() : undefined
+          }
+        }
+        
+        // Apply presentation text
+        if (edits.presentationText !== undefined) {
+          updatedSegment.presentationText = edits.presentationText.length > 0 && edits.presentationText.some(pt => pt && pt.trim().length > 0) ? edits.presentationText.filter(pt => pt && pt.trim().length > 0) : undefined
+        } else if (!updatedSegment.presentationText) {
+          // If no edits, try to get from sentence
+          const presentationText = sentence?.presentation_text
+          updatedSegment.presentationText = presentationText && Array.isArray(presentationText) && presentationText.length > 0 && presentationText.some(pt => pt && pt.trim().length > 0) ? presentationText.filter(pt => pt && pt.trim().length > 0) : undefined
+        }
+        
+        // If segment doesn't have audio but video is approved, try to find audio from sentence
+        if (!updatedSegment.audioUrl && !updatedSegment.audioBase64 && sentence?.audio) {
+          // Auto-attach audio even if not explicitly approved
+          const audioUrlOrBase64 = sentence.audio.audioUrl || ''
+          if (audioUrlOrBase64.startsWith('data:')) {
+            updatedSegment.audioBase64 = audioUrlOrBase64.split(',')[1]
+          } else if (audioUrlOrBase64) {
+            updatedSegment.audioUrl = audioUrlOrBase64
+          } else if (sentence.audio.audioBase64) {
+            updatedSegment.audioBase64 = sentence.audio.audioBase64
+          }
+        }
+        
+        return updatedSegment
       })
 
       const request: AssemblyRequest = {
@@ -796,6 +955,63 @@ export function VideoTimelineEditor({
     }
   }
 
+  // Save current edits - called when user clicks Save button
+  const handleSave = useCallback(() => {
+    // Save current segmentEdits to savedSegmentEdits
+    setSavedSegmentEdits({ ...segmentEdits })
+    
+    // Also update scriptData with current edits so they persist
+    if (onScriptUpdate && scriptData) {
+      const updatedSentences = scriptData.sentences.map(s => {
+        const edits = segmentEdits[s.id] || {}
+        const updatedSentence = { ...s }
+        
+        // Update subtitle text if edited
+        if (edits.subtitleText !== undefined && updatedSentence.visual) {
+          updatedSentence.visual = {
+            ...updatedSentence.visual,
+            subtitleText: edits.subtitleText,
+          }
+        }
+        
+        // Update subtitle settings if edited
+        if ((edits.subtitleSize !== undefined || edits.subtitlePosition !== undefined || edits.subtitleZoom !== undefined) && updatedSentence.visual) {
+          updatedSentence.visual = {
+            ...updatedSentence.visual,
+            subtitleSettings: {
+              ...updatedSentence.visual.subtitleSettings,
+                                    fontSize: edits.subtitleSize ?? updatedSentence.visual.subtitleSettings?.fontSize ?? 42,
+                                    yPosition: edits.subtitlePosition ?? updatedSentence.visual.subtitleSettings?.yPosition ?? 950,
+                                    zoom: edits.subtitleZoom ?? updatedSentence.visual.subtitleSettings?.zoom ?? 1.0,
+            },
+          }
+        }
+        
+        // Update presentation text if edited
+        if (edits.presentationText !== undefined) {
+          updatedSentence.presentation_text = edits.presentationText.length > 0 ? edits.presentationText : undefined
+        }
+        
+        // Update transition if edited
+        if (edits.transitionType !== undefined && updatedSentence.visual) {
+          updatedSentence.visual = {
+            ...updatedSentence.visual,
+            transitionType: edits.transitionType,
+          }
+        }
+        
+        return updatedSentence
+      })
+      
+      onScriptUpdate({
+        ...scriptData,
+        sentences: updatedSentences,
+      })
+    }
+    
+    toast.success('Video settings saved successfully!')
+  }, [segmentEdits, scriptData, onScriptUpdate])
+
   const handleAssemble = useCallback(async () => {
     if (approvedSegments.length === 0) {
       toast.error('No approved segments found. Please approve visuals and audio first.')
@@ -804,6 +1020,64 @@ export function VideoTimelineEditor({
 
     if (isAssembling || isPreviewing) {
       return // Prevent duplicate assembly
+    }
+
+    // Auto-save before assembling if there are unsaved changes
+    const hasUnsavedChanges = Object.keys(segmentEdits).length > 0 && 
+      JSON.stringify(segmentEdits) !== JSON.stringify(savedSegmentEdits)
+    
+    if (hasUnsavedChanges) {
+      console.log('💾 Auto-saving changes before assembly...')
+      setSavedSegmentEdits({ ...segmentEdits })
+      
+      // Also update scriptData with current edits
+      if (onScriptUpdate && scriptData) {
+        const updatedSentences = scriptData.sentences.map(s => {
+          const edits = segmentEdits[s.id] || {}
+          const updatedSentence = { ...s }
+          
+          // Update subtitle text if edited
+          if (edits.subtitleText !== undefined && updatedSentence.visual) {
+            updatedSentence.visual = {
+              ...updatedSentence.visual,
+              subtitleText: edits.subtitleText,
+            }
+          }
+          
+          // Update subtitle settings if edited
+          if ((edits.subtitleSize !== undefined || edits.subtitlePosition !== undefined || edits.subtitleZoom !== undefined) && updatedSentence.visual) {
+            updatedSentence.visual = {
+              ...updatedSentence.visual,
+              subtitleSettings: {
+                ...updatedSentence.visual.subtitleSettings,
+                                    fontSize: edits.subtitleSize ?? updatedSentence.visual.subtitleSettings?.fontSize ?? 42,
+                                    yPosition: edits.subtitlePosition ?? updatedSentence.visual.subtitleSettings?.yPosition ?? 950,
+                                    zoom: edits.subtitleZoom ?? updatedSentence.visual.subtitleSettings?.zoom ?? 1.0,
+              },
+            }
+          }
+          
+          // Update presentation text if edited
+          if (edits.presentationText !== undefined) {
+            updatedSentence.presentation_text = edits.presentationText.length > 0 ? edits.presentationText : undefined
+          }
+          
+          // Update transition if edited
+          if (edits.transitionType !== undefined && updatedSentence.visual) {
+            updatedSentence.visual = {
+              ...updatedSentence.visual,
+              transitionType: edits.transitionType,
+            }
+          }
+          
+          return updatedSentence
+        })
+        
+        onScriptUpdate({
+          ...scriptData,
+          sentences: updatedSentences,
+        })
+      }
     }
 
     setIsAssembling(true)
@@ -846,55 +1120,139 @@ export function VideoTimelineEditor({
       }
 
       // Ensure all segments have audio attached automatically if available
+      // CRITICAL: Apply saved edits to segments for assembly (saved state takes priority)
       const segmentsWithAutoAudio = approvedSegments.map(segment => {
-        // If segment doesn't have audio but video is approved, try to find audio from sentence
-        if (!segment.audioUrl && !segment.audioBase64 && scriptData) {
-          const sentence = scriptData.sentences.find(s => s.id === segment.sentenceId)
-          if (sentence?.audio) {
-            // Auto-attach audio even if not explicitly approved (when video is approved)
-            const audioUrlOrBase64 = sentence.audio.audioUrl || ''
-            
-            // Check audioBase64 field first (preferred)
-            if (sentence.audio.audioBase64) {
-              console.log(`🎵 Auto-attaching audio to segment ${segment.sentenceId} from audioBase64`)
-              return {
-                ...segment,
-                audioBase64: sentence.audio.audioBase64
-              }
-            }
-            
-            // Then check audioUrl
-            if (audioUrlOrBase64.startsWith('data:')) {
-              console.log(`🎵 Auto-attaching audio to segment ${segment.sentenceId} from data URL`)
-              return {
-                ...segment,
-                audioBase64: audioUrlOrBase64.split(',')[1]
-              }
-            } else if (audioUrlOrBase64) {
-              console.log(`🎵 Auto-attaching audio to segment ${segment.sentenceId} from URL`)
-              return {
-                ...segment,
-                audioUrl: audioUrlOrBase64
-              }
-            }
-          } else {
-            console.log(`⚠️ Segment ${segment.sentenceId} has approved video but no audio available`)
-          }
-        } else if (segment.audioUrl || segment.audioBase64) {
-          console.log(`✅ Segment ${segment.sentenceId} already has audio attached`)
+        // Apply saved edits to segment if available (for assembly, use saved state)
+        const edits = savedSegmentEdits[segment.sentenceId] || segmentEdits[segment.sentenceId] || {}
+        const sentence = scriptData?.sentences.find(s => s.id === segment.sentenceId)
+        
+        // Update segment with saved edits
+        const updatedSegment = { ...segment }
+        
+        // Apply crop edits
+        if (edits.startTime !== undefined || edits.endTime !== undefined) {
+          updatedSegment.startTime = edits.startTime
+          updatedSegment.endTime = edits.endTime
         }
-        return segment
+        
+        // Apply transition
+        if (edits.transitionType !== undefined) {
+          updatedSegment.transitionType = edits.transitionType
+        }
+        
+        // Apply subtitle settings
+        if (edits.subtitleSize !== undefined || edits.subtitlePosition !== undefined || edits.subtitleZoom !== undefined) {
+          updatedSegment.subtitleSettings = {
+            ...updatedSegment.subtitleSettings,
+            fontSize: edits.subtitleSize ?? updatedSegment.subtitleSettings?.fontSize ?? 42,
+            yPosition: edits.subtitlePosition ?? updatedSegment.subtitleSettings?.yPosition ?? 0,
+            zoom: edits.subtitleZoom ?? updatedSegment.subtitleSettings?.zoom ?? 1.0,
+          }
+        }
+        
+        // Apply subtitle text - CRITICAL: ALWAYS include subtitleText (use sentence.text as final fallback)
+        // The subtitleText is the narration text and MUST be shown as subtitles in the video
+        if (edits.subtitleText !== undefined) {
+          updatedSegment.subtitleText = edits.subtitleText.trim().length > 0 ? edits.subtitleText.trim() : (sentence?.text && sentence.text.trim().length > 0 ? sentence.text.trim() : undefined)
+        } else if (!updatedSegment.subtitleText || updatedSegment.subtitleText.trim().length === 0) {
+          // If no edits or empty, ensure we have subtitleText from sentence (it's the narration)
+          updatedSegment.subtitleText = sentence?.visual?.subtitleText || sentence?.text || undefined
+          if (updatedSegment.subtitleText) {
+            updatedSegment.subtitleText = updatedSegment.subtitleText.trim().length > 0 ? updatedSegment.subtitleText.trim() : undefined
+          }
+        }
+        
+        // Apply presentation text
+        if (edits.presentationText !== undefined) {
+          updatedSegment.presentationText = edits.presentationText.length > 0 && edits.presentationText.some(pt => pt && pt.trim().length > 0) ? edits.presentationText.filter(pt => pt && pt.trim().length > 0) : undefined
+        } else if (!updatedSegment.presentationText) {
+          // If no edits, try to get from sentence
+          const presentationText = sentence?.presentation_text
+          updatedSegment.presentationText = presentationText && Array.isArray(presentationText) && presentationText.length > 0 && presentationText.some(pt => pt && pt.trim().length > 0) ? presentationText.filter(pt => pt && pt.trim().length > 0) : undefined
+        }
+        
+        // If segment doesn't have audio but video is approved, try to find audio from sentence
+        if (!updatedSegment.audioUrl && !updatedSegment.audioBase64 && sentence?.audio) {
+          // Auto-attach audio even if not explicitly approved (when video is approved)
+          const audioUrlOrBase64 = sentence.audio.audioUrl || ''
+          
+          // Check audioBase64 field first (preferred)
+          if (sentence.audio.audioBase64) {
+            console.log(`🎵 Auto-attaching audio to segment ${segment.sentenceId} from audioBase64`)
+            updatedSegment.audioBase64 = sentence.audio.audioBase64
+          }
+          // Then check audioUrl
+          else if (audioUrlOrBase64.startsWith('data:')) {
+            console.log(`🎵 Auto-attaching audio to segment ${segment.sentenceId} from data URL`)
+            updatedSegment.audioBase64 = audioUrlOrBase64.split(',')[1]
+          } else if (audioUrlOrBase64) {
+            console.log(`🎵 Auto-attaching audio to segment ${segment.sentenceId} from URL`)
+            updatedSegment.audioUrl = audioUrlOrBase64
+          }
+        } else if (updatedSegment.audioUrl || updatedSegment.audioBase64) {
+          console.log(`✅ Segment ${segment.sentenceId} already has audio attached`)
+        } else {
+          console.log(`⚠️ Segment ${segment.sentenceId} has approved video but no audio available`)
+        }
+        
+        return updatedSegment
       })
 
-      // Log final assembly request details
+      // Log final assembly request details including text overlay data
+      const segmentsWithTextOverlays = segmentsWithAutoAudio.filter(s => 
+        s.subtitleText || (s.presentationText && s.presentationText.length > 0)
+      )
+      
+      console.log('🎬 ========== ASSEMBLY REQUEST DEBUG ==========')
+      console.log('📊 Approved Segments Count:', approvedSegments.length)
+      console.log('📊 Segments to Assemble:', segmentsWithAutoAudio.length)
+      console.log('📊 Approved Segment IDs:', approvedSegments.map(s => s.sentenceId.substring(0, 8)))
+      console.log('📊 Segments to Assemble IDs:', segmentsWithAutoAudio.map(s => s.sentenceId.substring(0, 8)))
+      console.log('📊 Total Sentences in Script:', scriptData?.sentences?.length || 0)
+      console.log('📊 Sentences with Approved Visuals:', scriptData?.sentences?.filter(s => {
+        const isApproved = s.visual?.approved === true || s.visual?.status === 'approved'
+        const hasVideo = !!(s.visual?.videoUrl || s.visual?.imageUrl)
+        return isApproved && hasVideo
+      }).map(s => s.id.substring(0, 8)) || [])
+      
       console.log('🎬 Assembling video with:', {
+        totalApprovedSegments: approvedSegments.length,
+        segmentsToAssemble: segmentsWithAutoAudio.length,
         segmentCount: segmentsWithAutoAudio.length,
+        segmentsWithTextOverlays: segmentsWithTextOverlays.length,
         hasBackgroundMusic: !!(backgroundMusicBase64 || backgroundMusicUrl),
         backgroundMusicType: backgroundMusicBase64 ? 'base64' : backgroundMusicUrl ? 'url' : 'none',
         musicVolume: finalMusicVolume,
         aspectRatio,
         segmentsWithAudio: segmentsWithAutoAudio.filter(s => s.audioUrl || s.audioBase64).length,
+        segmentIds: segmentsWithAutoAudio.map(s => s.sentenceId.substring(0, 8)),
+        textOverlayDetails: segmentsWithAutoAudio.map(s => ({
+          sentenceId: s.sentenceId.substring(0, 8),
+          hasSubtitleText: !!s.subtitleText,
+          hasPresentationText: !!(s.presentationText && s.presentationText.length > 0),
+          subtitleTextPreview: s.subtitleText ? s.subtitleText.substring(0, 50) : null,
+          presentationTextCount: s.presentationText?.length || 0,
+          hasSubtitleSettings: !!s.subtitleSettings,
+        })),
       })
+      console.log('🎬 ============================================')
+      
+      // CRITICAL: Verify we're assembling ALL approved segments
+      if (segmentsWithAutoAudio.length === 0) {
+        toast.error('No segments to assemble. Please approve at least one visual.')
+        setIsAssembling(false)
+        return
+      }
+      
+      if (segmentsWithAutoAudio.length !== approvedSegments.length) {
+        console.warn('⚠️ Mismatch: approvedSegments.length =', approvedSegments.length, 'but segmentsWithAutoAudio.length =', segmentsWithAutoAudio.length)
+        toast.warning(`Warning: Expected ${approvedSegments.length} segments but only ${segmentsWithAutoAudio.length} will be assembled.`)
+      }
+      
+      if (segmentsWithAutoAudio.length === 1 && approvedSegments.length > 1) {
+        console.error('❌ CRITICAL: Only 1 segment will be assembled but', approvedSegments.length, 'were approved!')
+        toast.error(`Only 1 video will be assembled, but ${approvedSegments.length} videos were approved. Check console for details.`)
+      }
 
       const request: AssemblyRequest = {
         segments: segmentsWithAutoAudio,
@@ -921,6 +1279,8 @@ export function VideoTimelineEditor({
       
       // Track for cleanup
       currentBlobUrlRef.current = videoUrl
+      // CRITICAL: Update state so video element re-renders with new blob URL
+      setVideoSrc(videoUrl)
       
       // Set video element src IMMEDIATELY (synchronously)
       if (videoRef.current) {
@@ -1060,6 +1420,8 @@ export function VideoTimelineEditor({
       // Revoke previous blob URL first (only if different)
       const oldBlobUrl = currentBlobUrlRef.current
       if (oldBlobUrl) {
+        // Clear state first to prevent video element from trying to use stale blob URL
+        setVideoSrc('')
         // Only revoke if video element is not using it
         if (!videoRef.current || videoRef.current.src !== oldBlobUrl) {
           safeRevokeBlob(oldBlobUrl)
@@ -1087,6 +1449,8 @@ export function VideoTimelineEditor({
       // Create blob URL
       const blobUrl = URL.createObjectURL(blob)
       currentBlobUrlRef.current = blobUrl
+      // CRITICAL: Update state so video element re-renders with new blob URL
+      setVideoSrc(blobUrl)
       
       console.log('✅ Created blob URL:', {
         blobUrl: blobUrl.substring(0, 50) + '...',
@@ -1153,13 +1517,13 @@ export function VideoTimelineEditor({
     }
   }
 
-  // Get current video URL - use blob ref if available, otherwise use state URL
+  // Get current video URL - use state (which tracks blob URL) if available, otherwise use non-blob URL from state
   // IMPORTANT: Don't create blob URLs here - only read existing ones
   // Blob URLs should be created in useEffect or event handlers only
   const getCurrentVideoUrl = (): string => {
-    // Return existing blob URL if available
-    if (currentBlobUrlRef.current) {
-      return currentBlobUrlRef.current
+    // Return state video src if available (this is the blob URL or empty)
+    if (videoSrc) {
+      return videoSrc
     }
     
     // Return non-blob URL if available (HTTP/HTTPS)
@@ -1196,20 +1560,38 @@ export function VideoTimelineEditor({
       toast.info('Video already exported! Downloading again...')
     }
 
-    // Get current video URL (blob ref or state)
-    const videoUrl = getCurrentVideoUrl()
-    if (!videoUrl) {
-      toast.error('No video source available. Please re-assemble.')
+    // CRITICAL: Ensure we have videoBase64 - never use blob URLs for export
+    if (!assembledVideo.videoBase64 || assembledVideo.videoBase64.length < 1000) {
+      toast.error('Video data is not ready. Please assemble the video first.')
+      console.error('❌ Invalid videoBase64 for export:', {
+        hasVideoBase64: !!assembledVideo.videoBase64,
+        videoBase64Length: assembledVideo.videoBase64?.length || 0,
+      })
       return
     }
 
-    // Download video
-    const link = document.createElement('a')
-    link.href = videoUrl
-    link.download = `final-video-${Date.now()}.mp4`
-    document.body.appendChild(link)
-    link.click()
-    document.body.removeChild(link)
+    try {
+      // CRITICAL: Create a fresh blob from base64 data (never use stale blob URLs)
+      const videoBlob = base64ToBlob(assembledVideo.videoBase64, 'video/mp4')
+      const downloadBlobUrl = URL.createObjectURL(videoBlob)
+      
+      // Download video using fresh blob URL
+      const link = document.createElement('a')
+      link.href = downloadBlobUrl
+      link.download = `final-video-${Date.now()}.mp4`
+      document.body.appendChild(link)
+      link.click()
+      document.body.removeChild(link)
+      
+      // Clean up the temporary blob URL after a short delay (to ensure download starts)
+      setTimeout(() => {
+        URL.revokeObjectURL(downloadBlobUrl)
+      }, 100)
+    } catch (error) {
+      console.error('❌ Failed to export video:', error)
+      toast.error('Failed to export video. Please try again.')
+      return
+    }
 
     // Mark as exported and save to ScriptData
     const exportedAt = new Date().toISOString()
@@ -1225,11 +1607,18 @@ export function VideoTimelineEditor({
     // REMOVED AUTO SAVE - Export is temporary, don't save to DB automatically
     // User should explicitly approve/save if they want to persist
     // For now, just keep in local state
+    
+    console.log('📤 Exporting video with text overlays (from assembled video):', {
+      videoBase64Length: assembledVideo.videoBase64.length,
+      videoSizeMB: (assembledVideo.videoBase64.length * 3 / 4 / (1024 * 1024)).toFixed(2),
+      duration: assembledVideo.duration,
+    });
 
     // Call onExport callback if provided
+    // CRITICAL: Pass empty string for videoUrl since we're using base64 - never pass blob URLs
     if (onExport) {
-      const videoUrl = getCurrentVideoUrl()
-      onExport(videoUrl, assembledVideo.videoBase64)
+      console.log('📤 Calling onExport with assembled videoBase64 (includes text overlays)...');
+      onExport('', assembledVideo.videoBase64) // Pass empty string - onExport should use videoBase64, not videoUrl
     }
 
     toast.success('✅ Video exported successfully!')
@@ -1360,7 +1749,7 @@ export function VideoTimelineEditor({
                   </div>
                 </div>
                 
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div className="space-y-4">
                   {/* Video Preview */}
                   <div className="border rounded-lg p-3">
                     <div className="flex items-center justify-between mb-2">
@@ -1392,43 +1781,7 @@ export function VideoTimelineEditor({
                             />
                           )}
 
-                          {/* Subtitle overlay preview (non-destructive) */}
-                          {sentence.visual.subtitleSettings && sentence.text && (
-                            <div
-                              className="absolute inset-x-0 pointer-events-none px-4"
-                              style={{
-                                // If explicit yPosition provided, use it (px from top);
-                                // otherwise default to bottom padding similar to gallery
-                                top: sentence.visual.subtitleSettings.yPosition !== undefined 
-                                  ? `${sentence.visual.subtitleSettings.yPosition}px` 
-                                  : undefined,
-                                bottom: sentence.visual.subtitleSettings.yPosition === undefined ? '24px' : undefined,
-                                transform: 'translateY(0)',
-                                textAlign: 'center',
-                                color: '#FFFFFF',
-                                fontWeight: 'bold',
-                                textShadow: '2px 2px 4px rgba(0,0,0,0.8)',
-                                fontSize: sentence.visual.subtitleSettings.fontSize 
-                                  ? `${sentence.visual.subtitleSettings.fontSize}px` 
-                                  : '20px',
-                              }}
-                            >
-                              <div
-                                style={{
-                                  display: 'inline-block',
-                                  transform: sentence.visual.subtitleSettings.zoom 
-                                    ? `scale(${sentence.visual.subtitleSettings.zoom})` 
-                                    : 'none',
-                                  transformOrigin: 'center',
-                                  padding: '2px 6px',
-                                  borderRadius: '4px',
-                                  background: 'rgba(0,0,0,0.25)',
-                                }}
-                              >
-                                {sentence.text}
-                              </div>
-                            </div>
-                          )}
+                          {/* Text overlays removed - using only baked-in text from video */}
                         </div>
 
                         {!sentence.visual.approved && (
@@ -1440,6 +1793,9 @@ export function VideoTimelineEditor({
                                   console.log('🎬 Approving video from editor:', sentence.id)
                                   // Build approved visual and persist through all channels
                                   const currentVisual = sentence.visual || { approved: false, status: 'completed' }
+                                  // Get edits for this segment
+                                  const edits = segmentEdits[sentence.id] || {}
+                                  
                                   const approvedVisual: SentenceVisual = {
                                     ...currentVisual,
                                     approved: true,
@@ -1448,12 +1804,30 @@ export function VideoTimelineEditor({
                                     videoUrl: currentVisual.videoUrl || sentence.visual?.videoUrl,
                                     imageUrl: currentVisual.imageUrl || sentence.visual?.imageUrl,
                                     thumbnailUrl: currentVisual.thumbnailUrl || sentence.visual?.thumbnailUrl,
-                                    transitionType: currentVisual.transitionType || sentence.visual?.transitionType,
-                                    subtitleSettings: currentVisual.subtitleSettings || sentence.visual?.subtitleSettings,
-                                    // CRITICAL: Preserve prompt and subtitleText when approving
+                                    transitionType: edits.transitionType || currentVisual.transitionType || sentence.visual?.transitionType,
+                                    subtitleSettings: currentVisual.subtitleSettings || sentence.visual?.subtitleSettings ? {
+                                      ...(currentVisual.subtitleSettings || sentence.visual?.subtitleSettings),
+                                      fontSize: edits.subtitleSize ?? currentVisual.subtitleSettings?.fontSize ?? sentence.visual?.subtitleSettings?.fontSize,
+                                      yPosition: edits.subtitlePosition ?? currentVisual.subtitleSettings?.yPosition ?? sentence.visual?.subtitleSettings?.yPosition,
+                                      zoom: currentVisual.subtitleSettings?.zoom ?? sentence.visual?.subtitleSettings?.zoom,
+                                    } : undefined,
+                                    // CRITICAL: Use edited subtitleText if available, otherwise use saved value
+                                    subtitleText: edits.subtitleText !== undefined 
+                                      ? edits.subtitleText 
+                                      : (currentVisual.subtitleText || sentence.visual?.subtitleText || sentence.text),
+                                    // CRITICAL: Preserve prompt when approving
                                     prompt: currentVisual.prompt || sentence.visual?.prompt,
-                                    subtitleText: currentVisual.subtitleText || sentence.visual?.subtitleText,
                                   } as any
+                                  
+                                  // CRITICAL: Also update sentence presentation_text if edited
+                                  if (edits.presentationText !== undefined && onScriptUpdate && scriptData) {
+                                    const updatedSentences = scriptData.sentences.map(s => 
+                                      s.id === sentence.id 
+                                        ? { ...s, presentation_text: edits.presentationText }
+                                        : s
+                                    )
+                                    onScriptUpdate({ ...scriptData, sentences: updatedSentences })
+                                  }
 
                                   // CRITICAL: Validate sentence.id exists in scriptData before updating
                                   const targetSentence = scriptData?.sentences.find(s => s.id === sentence.id)
@@ -1482,7 +1856,8 @@ export function VideoTimelineEditor({
                                     // Parent component will handle saving in handleVisualApprove
 
                                     // 2) Call approval callback - THIS will trigger save
-                                    onVisualApprove(sentence.id)
+                                    // Stay on the same page - approval doesn't cause navigation
+                                    onVisualApprove?.(sentence.id)
                                   } finally {
                                     setApprovingIds(prev => {
                                       const next = new Set(prev)
@@ -1505,7 +1880,7 @@ export function VideoTimelineEditor({
                             )}
                           </div>
                         )}
-                        {sentence.visual.approved && (
+                        {sentence.visual?.approved && (
                           <div className="pt-2 border-t">
                             <div className="flex items-center gap-2 p-2 bg-green-50 dark:bg-green-950 border border-green-200 dark:border-green-800 rounded">
                               <CheckCircle className="h-4 w-4 text-green-600 dark:text-green-400" />
@@ -1523,31 +1898,118 @@ export function VideoTimelineEditor({
                   
                   {/* Audio Preview */}
                   <div className="border rounded-lg p-3">
-                    <h4 className="text-sm font-medium mb-2 flex items-center gap-2">
+                      <div className="flex items-center justify-between mb-2">
+                        <h4 className="text-sm font-medium flex items-center gap-2">
                       <Volume2 className="h-4 w-4" />
                       Audio
                     </h4>
-                    {sentence.audio?.audioUrl ? (
+                        {sentence.audio?.approved && (
+                          <Badge variant="outline" className="text-xs bg-green-50 text-green-700 border-green-200">
+                            Approved
+                          </Badge>
+                        )}
+                      </div>
+                    {sentence.audio?.audioUrl || sentence.audio?.audioBase64 ? (
                       <div className="space-y-2">
                         <audio 
-                          src={sentence.audio.audioUrl} 
+                          src={sentence.audio.audioUrl || (sentence.audio.audioBase64 ? `data:audio/mpeg;base64,${sentence.audio.audioBase64}` : '')} 
                           controls
                           className="w-full"
+                          key={sentence.audio.audioUrl || sentence.audio.audioBase64} // Force re-render when audio changes
                         />
                         {!sentence.audio.approved && (
                           <Button
                             onClick={() => onAudioApprove?.(sentence.id)}
                             variant="default"
                             size="sm"
-                            className="w-full mt-2 bg-green-600 hover:bg-green-700"
+                              className="w-full mt-2 bg-green-600 hover:bg-green-700 text-white"
                           >
                             <CheckCircle className="h-4 w-4 mr-2" />
                             Export to Video Assembly
                           </Button>
                         )}
+                          {sentence.audio.approved && (
+                            <div className="flex items-center gap-2 p-2 bg-green-50 dark:bg-green-950 border border-green-200 dark:border-green-800 rounded">
+                              <CheckCircle className="h-4 w-4 text-green-600 dark:text-green-400" />
+                              <span className="text-xs font-medium text-green-800 dark:text-green-200">
+                                ✅ Approved - Ready for Assembly
+                              </span>
+                            </div>
+                          )}
                       </div>
                     ) : (
-                      <p className="text-xs text-muted-foreground">No audio available</p>
+                      <div className="space-y-2">
+                        <p className="text-xs text-muted-foreground">No audio available</p>
+                        <Button
+                          onClick={async () => {
+                            if (!scriptData) return
+                            
+                            setGeneratingAudioFor(sentence.id)
+                            try {
+                              const { elevenLabsService } = await import('@/services/elevenLabsService')
+                              // Use sentence text for audio generation (not subtitleText)
+                              const audioText = sentence.text
+                              
+                              if (!audioText || audioText.trim().length === 0) {
+                                toast.error('No sentence text available for audio generation')
+                                setGeneratingAudioFor(null)
+                                return
+                              }
+                              
+                              toast.info('🎤 Generating audio narration...')
+                              
+                              const result = await elevenLabsService.generateAudio({
+                                text: audioText.trim(),
+                                sentenceId: sentence.id,
+                                voiceId: '21m00Tcm4TlvDq8ikWAM', // Default voice
+                              })
+                              
+                              const generatedAudio: SentenceAudio = {
+                                ...result,
+                                approved: true,
+                                status: 'approved',
+                                isCustom: false,
+                              }
+                              
+                              // Update scriptData to reflect the change (this is required)
+                              if (onScriptUpdate && scriptData) {
+                                const updatedSentences = scriptData.sentences.map(s =>
+                                  s.id === sentence.id ? { ...s, audio: generatedAudio } : s
+                                )
+                                onScriptUpdate({ ...scriptData, sentences: updatedSentences })
+                              }
+                              
+                              // Also call onAudioUpdate if provided (optional callback)
+                              if (onAudioUpdate) {
+                                onAudioUpdate(sentence.id, generatedAudio)
+                              }
+                              
+                              toast.success('✅ Audio generated and attached! You can now play it.')
+                            } catch (error: any) {
+                              console.error('❌ Audio generation failed:', error)
+                              toast.error(error.message || 'Failed to generate audio')
+                            } finally {
+                              setGeneratingAudioFor(null)
+                            }
+                          }}
+                          variant="outline"
+                          size="sm"
+                          disabled={generatingAudioFor === sentence.id}
+                          className="w-full"
+                        >
+                          {generatingAudioFor === sentence.id ? (
+                            <>
+                              <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                              Generating...
+                            </>
+                          ) : (
+                            <>
+                              <Volume2 className="h-4 w-4 mr-2" />
+                              Generate Audio (Default Voice)
+                            </>
+                          )}
+                        </Button>
+                      </div>
                     )}
                   </div>
                 </div>
@@ -1607,7 +2069,6 @@ export function VideoTimelineEditor({
               {approvedSegments.map((segment, index) => {
                 const sentence = scriptData?.sentences?.find(s => s.id === segment.sentenceId)
                 const edits = segmentEdits[segment.sentenceId] || {}
-                const baseDuration = sentence?.audio?.duration || 6
                 const isExpanded = expandedSegments.has(segment.sentenceId)
                 
                 return (
@@ -1644,6 +2105,77 @@ export function VideoTimelineEditor({
                           )}
                         </div>
                       </div>
+                      {/* Save Button for Each Segment */}
+                      <Button
+                        onClick={() => {
+                          // Save edits for this specific segment
+                          const segmentEditsToSave = edits
+                          setSavedSegmentEdits(prev => ({
+                            ...prev,
+                            [segment.sentenceId]: { ...segmentEditsToSave }
+                          }))
+                          
+                          // Also update scriptData with current edits for this segment
+                          if (onScriptUpdate && scriptData) {
+                            const updatedSentences = scriptData.sentences.map(s => {
+                              if (s.id !== segment.sentenceId) return s
+                              
+                              const updatedSentence = { ...s }
+                              const segmentEdits = edits
+                              
+                              // Update subtitle text if edited
+                              if (segmentEdits.subtitleText !== undefined && updatedSentence.visual) {
+                                updatedSentence.visual = {
+                                  ...updatedSentence.visual,
+                                  subtitleText: segmentEdits.subtitleText,
+                                }
+                              }
+                              
+                              // Update subtitle settings if edited
+                              if ((segmentEdits.subtitleSize !== undefined || segmentEdits.subtitlePosition !== undefined || segmentEdits.subtitleZoom !== undefined) && updatedSentence.visual) {
+                                updatedSentence.visual = {
+                                  ...updatedSentence.visual,
+                                  subtitleSettings: {
+                                    ...updatedSentence.visual.subtitleSettings,
+                                    fontSize: segmentEdits.subtitleSize ?? updatedSentence.visual.subtitleSettings?.fontSize ?? 42,
+                                    yPosition: segmentEdits.subtitlePosition ?? updatedSentence.visual.subtitleSettings?.yPosition ?? 950,
+                                    zoom: segmentEdits.subtitleZoom ?? updatedSentence.visual.subtitleSettings?.zoom ?? 1.0,
+                                  },
+                                }
+                              }
+                              
+                              // Update presentation text if edited
+                              if (segmentEdits.presentationText !== undefined) {
+                                updatedSentence.presentation_text = segmentEdits.presentationText.length > 0 ? segmentEdits.presentationText : undefined
+                              }
+                              
+                              // Update transition if edited
+                              if (segmentEdits.transitionType !== undefined && updatedSentence.visual) {
+                                updatedSentence.visual = {
+                                  ...updatedSentence.visual,
+                                  transitionType: segmentEdits.transitionType,
+                                }
+                              }
+                              
+                              return updatedSentence
+                            })
+                            
+                            onScriptUpdate({
+                              ...scriptData,
+                              sentences: updatedSentences,
+                            })
+                          }
+                          
+                          toast.success(`Segment ${index + 1} saved!`)
+                        }}
+                        disabled={!Object.keys(edits).length || JSON.stringify(edits) === JSON.stringify(savedSegmentEdits[segment.sentenceId] || {})}
+                        variant="outline"
+                        size="sm"
+                        className="h-7"
+                      >
+                        <Save className="h-3 w-3 mr-1" />
+                        Save
+                      </Button>
                       <Button
                         variant="ghost"
                         size="sm"
@@ -1665,128 +2197,8 @@ export function VideoTimelineEditor({
                     </div>
                     
                     {isExpanded && (
-                      <div className="pt-2 border-t space-y-3">
-                        {/* Crop Controls */}
-                        <div>
-                          <label className="text-xs font-medium mb-1 block">✂️ Crop Video</label>
-                          <div className="grid grid-cols-2 gap-2">
-                            <div>
-                              <label className="text-xs text-muted-foreground">Start (s)</label>
-                              <Input
-                                type="number"
-                                step="0.1"
-                                min="0"
-                                max={baseDuration}
-                                value={edits.startTime ?? 0}
-                                onChange={(e) => {
-                                  const val = parseFloat(e.target.value) || 0
-                                  setSegmentEdits(prev => ({
-                                    ...prev,
-                                    [segment.sentenceId]: {
-                                      ...prev[segment.sentenceId],
-                                      startTime: Math.max(0, Math.min(val, baseDuration - 0.1))
-                                    }
-                                  }))
-                                }}
-                                className="h-8 text-xs"
-                              />
-                            </div>
-                            <div>
-                              <label className="text-xs text-muted-foreground">End (s)</label>
-                              <Input
-                                type="number"
-                                step="0.1"
-                                min="0.1"
-                                max={baseDuration}
-                                value={edits.endTime ?? baseDuration}
-                                onChange={(e) => {
-                                  const val = parseFloat(e.target.value) || baseDuration
-                                  setSegmentEdits(prev => ({
-                                    ...prev,
-                                    [segment.sentenceId]: {
-                                      ...prev[segment.sentenceId],
-                                      endTime: Math.max((edits.startTime ?? 0) + 0.1, Math.min(val, baseDuration))
-                                    }
-                                  }))
-                                }}
-                                className="h-8 text-xs"
-                              />
-                            </div>
-                          </div>
-                        </div>
-                        
-                        {/* Transition Selection */}
-                        <div>
-                          <label className="text-xs font-medium mb-1 block">🔄 Transition to Next</label>
-                          <div className="flex gap-1">
-                            {(['fade', 'slide', 'dissolve', 'none'] as const).map((type) => (
-                              <Button
-                                key={type}
-                                variant={edits.transitionType === type || (!edits.transitionType && segment.transitionType === type) ? 'default' : 'outline'}
-                                size="sm"
-                                onClick={() => {
-                                  setSegmentEdits(prev => ({
-                                    ...prev,
-                                    [segment.sentenceId]: {
-                                      ...prev[segment.sentenceId],
-                                      transitionType: type
-                                    }
-                                  }))
-                                }}
-                                className="h-7 text-xs capitalize flex-1"
-                              >
-                                {type}
-                              </Button>
-                            ))}
-                          </div>
-                        </div>
-                        
-                        {/* Subtitle Controls */}
-                        {sentence?.visual?.subtitleSettings && (
-                          <div>
-                            <label className="text-xs font-medium mb-1 block">📝 Subtitle Settings</label>
-                            <div className="space-y-2">
-                              <div>
-                                <label className="text-xs text-muted-foreground">Size: {edits.subtitleSize ?? sentence.visual.subtitleSettings.fontSize}px</label>
-                                <input
-                                  type="range"
-                                  min="12"
-                                  max="72"
-                                  value={edits.subtitleSize ?? sentence.visual.subtitleSettings.fontSize}
-                                  onChange={(e) => {
-                                    setSegmentEdits(prev => ({
-                                      ...prev,
-                                      [segment.sentenceId]: {
-                                        ...prev[segment.sentenceId],
-                                        subtitleSize: parseInt(e.target.value)
-                                      }
-                                    }))
-                                  }}
-                                  className="w-full h-2"
-                                />
-                              </div>
-                              <div>
-                                <label className="text-xs text-muted-foreground">Position: {edits.subtitlePosition ?? sentence.visual.subtitleSettings.yPosition}px</label>
-                                <input
-                                  type="range"
-                                  min="100"
-                                  max="980"
-                                  value={edits.subtitlePosition ?? sentence.visual.subtitleSettings.yPosition}
-                                  onChange={(e) => {
-                                    setSegmentEdits(prev => ({
-                                      ...prev,
-                                      [segment.sentenceId]: {
-                                        ...prev[segment.sentenceId],
-                                        subtitlePosition: parseInt(e.target.value)
-                                      }
-                                    }))
-                                  }}
-                                  className="w-full h-2"
-                                />
-                              </div>
-                            </div>
-                          </div>
-                        )}
+                      <div className="pt-3 border-t space-y-4">
+                        {/* Editing removed per user request */}
                       </div>
                     )}
                   </div>
@@ -2078,6 +2490,15 @@ export function VideoTimelineEditor({
         {/* Action Buttons */}
         <div className="flex flex-wrap gap-2">
           <Button
+            onClick={handleSave}
+            disabled={isAssembling || isPreviewing || approvedSegmentsLength === 0}
+            variant="outline"
+            className="flex-1"
+          >
+            <Save className="h-4 w-4 mr-2" />
+            Save
+          </Button>
+          <Button
             onClick={handlePreview}
             disabled={isPreviewing || isAssembling || approvedSegmentsLength === 0}
             variant="outline"
@@ -2116,94 +2537,79 @@ export function VideoTimelineEditor({
 
         {/* Video Player */}
         {assembledVideo && (
-          <div className="space-y-4">
+          <div className="space-y-0">
             <div className="relative bg-black rounded-lg overflow-hidden" style={{
               aspectRatio: aspectRatio === '16:9' ? '16/9' : '9/16',
             }}>
         <video
           ref={videoRef}
           key={`video-${assembledVideo.videoBase64 ? assembledVideo.videoBase64.substring(0, 30) : 'no-video'}-${currentBlobUrlRef.current ? 'has-blob' : 'no-blob'}`}
-          src={getCurrentVideoUrl() || undefined}
+          src={videoSrc || undefined}
           className="w-full h-full"
           controls
           playsInline
           preload="metadata"
           poster={posterUrl}
-                onTimeUpdate={() => setCurrentTime(videoRef.current?.currentTime || 0)}
-                onLoadedMetadata={() => {
-                  // Ensure UI reflects metadata duration
-                  if (assembledVideo && videoRef.current?.duration) {
-                    if (!assembledVideo.duration || Math.abs(assembledVideo.duration - videoRef.current.duration) > 0.25) {
-                      setAssembledVideo(prev => prev ? { ...prev, duration: videoRef.current!.duration } : prev)
-                    }
-                  }
-                }}
-                onError={(e) => {
-                  const error = e.currentTarget.error
-                  const currentSrc = videoRef.current?.currentSrc || videoRef.current?.src || ''
-                  
-                  console.error('⚠️ Video element error:', {
-                    code: error?.code,
-                    message: error?.message,
-                    errorType: error?.code === 4 ? 'FORMAT_ERROR' : 'UNKNOWN',
-                    currentSrc: currentSrc.substring(0, 60),
-                    hasBase64: !!assembledVideo?.videoBase64,
-                    hasBlobUrl: !!currentBlobUrlRef.current,
-                    blobUrlMatches: currentSrc === currentBlobUrlRef.current,
-                  })
-                  
-                  // If error code 4 (FORMAT_ERROR), the blob might be corrupted
-                  // Always try to recreate from base64 if we have it
-                  if (assembledVideo?.videoBase64) {
-                    console.log('🔄 onError: Attempting to recreate blob URL from base64...')
-                    
-                    // Wait a bit before recreating to avoid rapid retries
-                    setTimeout(() => {
-                      const ok = recreateBlobFromBase64()
-                      if (!ok) {
-                        toast.error('Failed to load video. The video data may be corrupted. Please re-assemble.')
-                      } else {
-                        console.log('✅ Blob URL recreated, video should reload automatically')
-                      }
-                    }, 200)
-                  } else {
-                    toast.error('No video data available. Please re-assemble.')
-                  }
-                }}
-                style={{
-                  filter: `
-                    brightness(${brightness}%) 
-                    contrast(${contrast}%) 
-                    saturate(${saturation}%)
-                    ${videoFilter === 'sepia' ? 'sepia(100%)' : ''}
-                    ${videoFilter === 'grayscale' ? 'grayscale(100%)' : ''}
-                    ${videoFilter === 'vintage' ? 'sepia(50%) contrast(120%) brightness(90%)' : ''}
-                    ${videoFilter === 'cool' ? 'hue-rotate(180deg) saturate(120%)' : ''}
-                    ${videoFilter === 'warm' ? 'sepia(30%) saturate(130%) brightness(110%)' : ''}
-                  `.trim(),
+          onTimeUpdate={() => setCurrentTime(videoRef.current?.currentTime || 0)}
+          onLoadedMetadata={() => {
+            // Ensure UI reflects metadata duration
+            if (assembledVideo && videoRef.current?.duration) {
+              if (!assembledVideo.duration || Math.abs(assembledVideo.duration - videoRef.current.duration) > 0.25) {
+                setAssembledVideo(prev => prev ? { ...prev, duration: videoRef.current!.duration } : prev)
+              }
+            }
+          }}
+          onError={(e) => {
+            const error = e.currentTarget.error
+            const currentSrc = videoRef.current?.currentSrc || videoRef.current?.src || ''
+            
+            console.error('⚠️ Video element error:', {
+              code: error?.code,
+              message: error?.message,
+              errorType: error?.code === 4 ? 'FORMAT_ERROR' : 'UNKNOWN',
+              currentSrc: currentSrc.substring(0, 60),
+              hasBase64: !!assembledVideo?.videoBase64,
+              hasBlobUrl: !!currentBlobUrlRef.current,
+              blobUrlMatches: currentSrc === currentBlobUrlRef.current,
+            })
+            
+            // If error code 4 (FORMAT_ERROR), the blob might be corrupted
+            // Always try to recreate from base64 if we have it
+            if (assembledVideo?.videoBase64) {
+              console.log('🔄 onError: Attempting to recreate blob URL from base64...')
+              
+              // Wait a bit before recreating to avoid rapid retries
+              setTimeout(() => {
+                const ok = recreateBlobFromBase64()
+                if (!ok) {
+                  toast.error('Failed to load video. The video data may be corrupted. Please re-assemble.')
+                } else {
+                  console.log('✅ Blob URL recreated, video should reload automatically')
+                }
+              }, 200)
+            } else {
+              toast.error('No video data available. Please re-assemble.')
+            }
+          }}
+          style={{
+            filter: `
+              brightness(${brightness}%) 
+              contrast(${contrast}%) 
+              saturate(${saturation}%)
+              ${videoFilter === 'sepia' ? 'sepia(100%)' : ''}
+              ${videoFilter === 'grayscale' ? 'grayscale(100%)' : ''}
+              ${videoFilter === 'vintage' ? 'sepia(50%) contrast(120%) brightness(90%)' : ''}
+              ${videoFilter === 'cool' ? 'hue-rotate(180deg) saturate(120%)' : ''}
+              ${videoFilter === 'warm' ? 'sepia(30%) saturate(130%) brightness(110%)' : ''}
+            `.trim(),
           }}
         >
           {getCurrentVideoUrl() ? (
             <source src={getCurrentVideoUrl()} type="video/mp4" />
           ) : null}
         </video>
-              {/* Text Overlay */}
-              {textOverlay && (
-                <div
-                  className="absolute inset-x-0 px-4 pointer-events-none"
-                  style={{
-                    [textPosition === 'top' ? 'top' : textPosition === 'bottom' ? 'bottom' : 'top']: textPosition === 'center' ? '50%' : '20px',
-                    transform: textPosition === 'center' ? 'translateY(-50%)' : 'none',
-                    color: textColor,
-                    fontSize: `${textSize}px`,
-                    textShadow: '2px 2px 4px rgba(0,0,0,0.8)',
-                    fontWeight: 'bold',
-                    textAlign: 'center' as const,
-                  }}
-                >
-                  {textOverlay}
-                </div>
-              )}
+        
+        {/* Subtitle Section - REMOVED: Subtitles are now baked into video frames via FFMPEG, no overlay needed */}
             </div>
 
             {/* Playback Controls */}
@@ -2233,12 +2639,70 @@ export function VideoTimelineEditor({
               </div>
             </div>
 
+            {/* Action Buttons */}
+            <div className="space-y-2">
+              {/* Request Distribution Button - Always visible when video is assembled */}
+              <Button
+                onClick={async () => {
+                  toast.info('Button clicked! Processing...');
+                  console.log('🔵 Request Distribution button clicked');
+                  console.log('🔵 assembledVideo:', !!assembledVideo);
+                  console.log('🔵 onVideoExport:', !!onVideoExport);
+                  console.log('🔵 onExport:', !!onExport);
+                  
+                  if (!assembledVideo) {
+                    toast.error('No video to distribute - please assemble video first');
+                    return;
+                  }
+                  
+                  // CRITICAL: Validate we have videoBase64 - never use blob URLs for distribution
+                  if (!assembledVideo.videoBase64 || assembledVideo.videoBase64.length < 1000) {
+                    toast.error('Video data is not ready. Please assemble the video first.');
+                    console.error('❌ Invalid videoBase64 for distribution:', {
+                      hasVideoBase64: !!assembledVideo.videoBase64,
+                      videoBase64Length: assembledVideo.videoBase64?.length || 0,
+                    });
+                    return;
+                  }
+
+                  console.log('🔵 videoBase64 length:', assembledVideo.videoBase64.length);
+
+                  try {
+                    // Save video and trigger distribution request via onVideoExport callback
+                    // CRITICAL: Pass empty string for videoUrl - callbacks should use videoBase64, not blob URLs
+                    if (onVideoExport) {
+                      console.log('🔵 Calling onVideoExport with videoBase64 (includes text overlays)...');
+                      await onVideoExport('', assembledVideo.videoBase64);
+                      console.log('🔵 onVideoExport completed');
+                    } else if (onExport) {
+                      console.log('🔵 Calling onExport (fallback) with videoBase64...');
+                      await onExport('', assembledVideo.videoBase64);
+                      console.log('🔵 onExport completed');
+                    } else {
+                      console.error('❌ No onVideoExport or onExport callback available!');
+                      toast.error('Unable to save video. Callback not available.');
+                    }
+                  } catch (error) {
+                    console.error('❌ Error in Request Distribution button:', error);
+                    toast.error('Failed to process distribution request: ' + (error instanceof Error ? error.message : 'Unknown error'));
+                  }
+                }}
+                className="w-full"
+                size="lg"
+                variant="default"
+                disabled={!assembledVideo}
+              >
+                <CheckCircle className="h-4 w-4 mr-2" />
+                Request Distribution
+              </Button>
+
             {/* Approval Gate */}
             {!isApproved ? (
               <div className="flex gap-2">
                 <Button
                   onClick={handleApprove}
                   className="flex-1"
+                    variant="outline"
                 >
                   <CheckCircle className="h-4 w-4 mr-2" />
                   Approve for Export
@@ -2278,6 +2742,7 @@ export function VideoTimelineEditor({
                 </Button>
               </div>
             )}
+            </div>
           </div>
         )}
 

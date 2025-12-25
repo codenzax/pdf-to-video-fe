@@ -13,13 +13,17 @@ import {
   Video,
   Image as ImageIcon,
   FileText,
+  Sparkles,
+  X,
 } from 'lucide-react'
 import { toast } from 'sonner'
 import { gptStaticVideoService } from '@/services/gptStaticVideoService'
-import { Sentence, SentenceVisual, SentenceAudio } from '@/services/geminiService'
+import { Sentence, SentenceVisual, SentenceAudio, geminiService } from '@/services/geminiService'
 import { ImageData } from '@/services/grobidApi'
 import { Textarea } from '@/components/ui/textarea'
 import { Label } from '@/components/ui/label'
+import { UnsplashImageSearch } from './UnsplashImageSearch'
+import { UnsplashImageData } from '@/services/unsplashService'
 
 interface VisualGalleryProps {
   sentence: Sentence
@@ -51,20 +55,37 @@ export function VisualGallery({
   const [progress, setProgress] = useState(0)
   const [isPolling] = useState(false)
   const [isGeneratingPrompt, setIsGeneratingPrompt] = useState(false)
-  const [selectedMode, setSelectedMode] = useState<'gpt' | 'veo3'>(
+  const [selectedMode, setSelectedMode] = useState<'gpt' | 'unsplash'>(
     sentence.visual?.mode || 'gpt' // Default to GPT static mode
+  )
+  const [imageSource, setImageSource] = useState<'ai' | 'unsplash'>(
+    sentence.visual?.imageSource || 'ai' // Default to AI generation
+  )
+  const [showUnsplashSearch, setShowUnsplashSearch] = useState(false)
+  const [selectedUnsplashImage, setSelectedUnsplashImage] = useState<UnsplashImageData | null>(
+    sentence.visual?.unsplashImageData ? {
+      id: sentence.visual.unsplashImageData.id,
+      url: sentence.visual.unsplashImageData.url,
+      photographer: sentence.visual.unsplashImageData.photographer,
+      photographerUsername: sentence.visual.unsplashImageData.photographerUsername,
+      photographerUrl: sentence.visual.unsplashImageData.photographerUrl,
+      unsplashUrl: sentence.visual.unsplashImageData.unsplashUrl,
+      description: sentence.visual.unsplashImageData.description,
+      width: 0,
+      height: 0,
+    } : null
   )
   const [videoZoom, setVideoZoom] = useState<number>(1.0) // Video zoom: 0.5 - 2.0
   const [subtitleYPosition, setSubtitleYPosition] = useState<number>(
-    sentence.visual?.subtitleSettings?.yPosition || 940 // Default bottom position (ensures subtitles stay at bottom)
+    sentence.visual?.subtitleSettings?.yPosition || 950 // Default: positioned in white border area at bottom (30px from bottom)
   )
-  const [subtitleFontSize] = useState<number>(
+  const [subtitleFontSize, setSubtitleFontSize] = useState<number>(
     sentence.visual?.subtitleSettings?.fontSize || 42
   )
   const [subtitleZoom, setSubtitleZoom] = useState<number>(
     sentence.visual?.subtitleSettings?.zoom || 1.0
   )
-  const [transitionType, setTransitionType] = useState<'fade' | 'slide' | 'dissolve' | 'none'>(
+  const [transitionType] = useState<'fade' | 'slide' | 'dissolve' | 'none'>(
     sentence.visual?.transitionType || 'fade'
   )
   // Editable subtitle text (synchronized with video/audio generation)
@@ -78,7 +99,54 @@ export function VisualGallery({
   const [prompt, setPrompt] = useState<string>(() => {
     return sentence.visual?.prompt || ''
   })
+  // Editable presentation text (bullet points) - shown before video generation
+  const [presentationText, setPresentationText] = useState<string[]>(() => {
+    // First check if sentence has presentation_text from script generation
+    if (sentence.presentation_text && sentence.presentation_text.length > 0) {
+      return sentence.presentation_text
+    }
+    // Then check if visual has saved presentationText
+    if (sentence.visual?.presentationText && sentence.visual.presentationText.length > 0) {
+      return sentence.visual.presentationText
+    }
+    return []
+  })
+  const [isGeneratingBulletPoints, setIsGeneratingBulletPoints] = useState(false)
   const fileInputRef = useRef<HTMLInputElement>(null)
+
+  // Generate bullet points using Gemini (manual trigger only)
+  const generateBulletPointsForSentence = async () => {
+    if (isGeneratingBulletPoints || !sentence.text || sentence.text.trim().length === 0) {
+      return
+    }
+
+    setIsGeneratingBulletPoints(true)
+    try {
+      const bulletPoints = await geminiService.generateBulletPoints(
+        sentence.text,
+        typeof context === 'string' ? { fullScript: context } : context
+      )
+      
+      if (bulletPoints.length > 0) {
+        setPresentationText(bulletPoints)
+        // Auto-save to visual if it exists
+        if (visual) {
+          const updatedVisual: SentenceVisual = {
+            ...visual,
+            presentationText: bulletPoints,
+          }
+          setVisual(updatedVisual)
+          onVisualUpdate(sentence.id, updatedVisual)
+        }
+        toast.success('✅ Bullet points generated! They will be baked into the video.')
+      }
+    } catch (error: any) {
+      console.error('Failed to generate bullet points:', error)
+      toast.error('Failed to generate bullet points: ' + (error.message || 'Unknown error'))
+    } finally {
+      setIsGeneratingBulletPoints(false)
+    }
+  }
 
   // Track the last sentence ID to detect sentence changes
   const lastSentenceIdRef = useRef<string | undefined>(sentence.id)
@@ -93,11 +161,23 @@ export function VisualGallery({
       
       // Reset subtitle text tracking for new sentence
       if (sentence.visual?.subtitleText) {
-        lastSavedSubtitleText.current = sentence.visual.subtitleText
         setSubtitleText(sentence.visual.subtitleText)
       } else {
-        lastSavedSubtitleText.current = sentence.text || ''
         setSubtitleText(sentence.text || '')
+      }
+      
+      // Update last saved settings ref for new sentence
+      if (sentence.visual?.subtitleSettings) {
+        lastSavedSettingsRef.current = {
+          yPosition: sentence.visual.subtitleSettings.yPosition,
+          fontSize: sentence.visual.subtitleSettings.fontSize,
+          zoom: sentence.visual.subtitleSettings.zoom,
+          subtitleText: sentence.visual.subtitleText || sentence.text || '',
+        }
+      } else {
+        lastSavedSettingsRef.current = {
+          subtitleText: sentence.visual?.subtitleText || sentence.text || '',
+        }
       }
     }
     
@@ -113,19 +193,41 @@ export function VisualGallery({
       if (isNewSentence) {
         if (sentence.visual?.subtitleText) {
           setSubtitleText(sentence.visual.subtitleText)
-          lastSavedSubtitleText.current = sentence.visual.subtitleText
         } else {
           setSubtitleText(sentence.text || '')
-          lastSavedSubtitleText.current = sentence.text || ''
+        }
+        // Sync presentation text from visual or sentence
+        if (sentence.presentation_text && sentence.presentation_text.length > 0) {
+          setPresentationText(sentence.presentation_text)
+        } else if (sentence.visual?.presentationText && sentence.visual.presentationText.length > 0) {
+          setPresentationText(sentence.visual.presentationText)
+        } else {
+          // Don't auto-generate - user must click button
+          setPresentationText([])
         }
       }
       
-      // Sync visual state
-      if (sentence.visual !== visual) {
+      // Sync visual state only on new sentence OR if visual is null/undefined (prevent loops)
+      if (isNewSentence || !visual) {
         setVisual(sentence.visual)
       }
+      
+      // Only sync subtitle settings from visual on NEW sentence load (prevent infinite loops)
+      if (isNewSentence && sentence.visual?.subtitleSettings) {
+        const settings = sentence.visual.subtitleSettings
+        // Sync all settings once on initial load
+        if (settings.yPosition !== undefined) {
+          setSubtitleYPosition(settings.yPosition)
+        }
+        if (settings.fontSize !== undefined) {
+          setSubtitleFontSize(settings.fontSize)
+        }
+        if (settings.zoom !== undefined) {
+          setSubtitleZoom(settings.zoom)
+        }
+      }
     }
-  }, [sentence.id, sentence.visual, sentence.text]) // Sync when sentence ID or visual changes
+  }, [sentence.id, sentence.text]) // Only depend on sentence.id and sentence.text - NOT sentence.visual to prevent loops
 
   // Check if subtitle settings have changed from the saved video
   const subtitleSettingsChanged = visual && visual.status === 'completed' && (
@@ -135,84 +237,131 @@ export function VisualGallery({
     visual.subtitleText !== (subtitleText || sentence.text)
   )
 
+  // Track last saved subtitle settings to prevent unnecessary updates
+  const lastSavedSettingsRef = useRef<{
+    yPosition?: number
+    fontSize?: number
+    zoom?: number
+    subtitleText?: string
+  }>({
+    yPosition: sentence.visual?.subtitleSettings?.yPosition,
+    fontSize: sentence.visual?.subtitleSettings?.fontSize,
+    zoom: sentence.visual?.subtitleSettings?.zoom,
+    subtitleText: sentence.visual?.subtitleText || sentence.text || '',
+  })
+  
   // Auto-save subtitle settings when they change (if video already exists)
-  // Use a ref to prevent overwriting user edits
-  const lastSavedSubtitleText = useRef<string>(
-    sentence.visual?.subtitleText || sentence.text || ''
-  )
+  // Use debounce and refs to prevent unnecessary saves and infinite loops
+  const saveTimeoutRef = useRef<NodeJS.Timeout | null>(null)
   
   useEffect(() => {
+    // Only auto-save if video exists, is completed, and not approved
     if (visual && visual.status === 'completed' && !visual.approved) {
-      // Check if subtitle settings have changed
+      // Check if subtitle settings have actually changed from last saved state
       const settingsChanged = 
-        visual.subtitleSettings?.yPosition !== subtitleYPosition ||
-        visual.subtitleSettings?.fontSize !== subtitleFontSize ||
-        visual.subtitleSettings?.zoom !== subtitleZoom ||
-        visual.subtitleText !== subtitleText
+        lastSavedSettingsRef.current.yPosition !== subtitleYPosition ||
+        lastSavedSettingsRef.current.fontSize !== subtitleFontSize ||
+        lastSavedSettingsRef.current.zoom !== subtitleZoom ||
+        lastSavedSettingsRef.current.subtitleText !== subtitleText
 
+      // Only update if settings actually changed
       if (settingsChanged) {
-        // Auto-save updated subtitle settings to visual state
-        const updatedVisual: SentenceVisual = {
-          ...visual,
-          subtitleSettings: {
-            yPosition: subtitleYPosition,
-            fontSize: subtitleFontSize,
-            zoom: subtitleZoom,
-          },
-          subtitleText: subtitleText || sentence.text,
+        // Clear existing timeout
+        if (saveTimeoutRef.current) {
+          clearTimeout(saveTimeoutRef.current)
         }
-        setVisual(updatedVisual)
-        onVisualUpdate(sentence.id, updatedVisual)
-        lastSavedSubtitleText.current = subtitleText || sentence.text
+        
+        // Debounce updates to prevent rapid-fire saves
+        saveTimeoutRef.current = setTimeout(() => {
+          // Only update if still different (user might have changed again)
+          const stillChanged = 
+            lastSavedSettingsRef.current.yPosition !== subtitleYPosition ||
+            lastSavedSettingsRef.current.fontSize !== subtitleFontSize ||
+            lastSavedSettingsRef.current.zoom !== subtitleZoom ||
+            lastSavedSettingsRef.current.subtitleText !== subtitleText
+
+          if (stillChanged) {
+            // Update local visual state (don't trigger session save - only save on approve)
+            const updatedVisual: SentenceVisual = {
+              ...visual,
+              subtitleSettings: {
+                yPosition: subtitleYPosition,
+                fontSize: subtitleFontSize,
+                zoom: subtitleZoom,
+              },
+              subtitleText: subtitleText || sentence.text,
+            }
+            setVisual(updatedVisual)
+            
+            // Update refs to track what we've saved
+            lastSavedSettingsRef.current = {
+              yPosition: subtitleYPosition,
+              fontSize: subtitleFontSize,
+              zoom: subtitleZoom,
+              subtitleText: subtitleText || sentence.text,
+            }
+            
+            // NOTE: We DON'T call onVisualUpdate here to prevent session spam
+            // Settings will be saved when user clicks Approve
+            saveTimeoutRef.current = null
+          }
+        }, 500) // 500ms debounce - only update local state, don't save to session
       }
     }
-  }, [subtitleYPosition, subtitleFontSize, subtitleZoom, subtitleText, visual, sentence.id, sentence.text, onVisualUpdate])
+    
+    // Cleanup timeout on unmount
+    return () => {
+      if (saveTimeoutRef.current) {
+        clearTimeout(saveTimeoutRef.current)
+      }
+    }
+  }, [subtitleYPosition, subtitleFontSize, subtitleZoom, subtitleText, visual])
 
-  const handleGenerate = async () => {
+  const handleGenerateGPT = async () => {
+    // FIXED GPT/DALL-E GENERATION - ALWAYS uses DALL-E
     if (isGenerating) return
 
     setIsGenerating(true)
     setProgress(0)
 
     try {
-      if (selectedMode === 'gpt') {
-        // Transform images to match backend schema (only title and description)
-        const transformedImages = images?.map(img => ({
-          title: img.title || img.caption || '',
-          description: img.description || '',
-        })) || undefined
+      // ALWAYS use GPT/DALL-E generation
+      // ALWAYS use DALL-E/AI generation (never Unsplash)
+      const transformedImages = images?.map(img => ({
+        title: img.title || img.caption || '',
+        description: img.description || '',
+      })) || undefined
 
-        // GPT Static mode
-        // Log subtitle settings being sent
-        console.log('🎬 Generating video with subtitle settings:', {
+      console.log('?? FIXED GPT BUTTON: Generating with DALL-E (GPT Static):', {
+        imageSource: 'ai',
+        willUseDALL_E: true,
+        willUseUnsplash: false,
+      })
+
+      const result = await gptStaticVideoService.generateStaticVideo(
+        sentence.text,
+        6, // duration
+        typeof context === 'string' ? { fullScript: context } : context,
+        'none', // zoomEffect
+        transitionType,
+        {
           yPosition: subtitleYPosition,
           fontSize: subtitleFontSize,
           zoom: subtitleZoom,
-          subtitleText: subtitleText || sentence.text,
-          subtitleTextLength: (subtitleText || sentence.text).length,
-        })
-
-        const result = await gptStaticVideoService.generateStaticVideo(
-          sentence.text,
-          6, // duration
-          typeof context === 'string' ? { fullScript: context } : context,
-          'none', // zoomEffect
-          transitionType,
-          {
-            yPosition: subtitleYPosition,
-            fontSize: subtitleFontSize,
-            zoom: subtitleZoom,
-          },
-          subtitleText || sentence.text,
-          prompt || undefined,
-          tables,
-          transformedImages
-        )
+        },
+        subtitleText || sentence.text,
+        prompt || undefined,
+        tables,
+        transformedImages,
+        'ai', // FIXED: ALWAYS 'ai' for GPT button
+        undefined, // FIXED: ALWAYS undefined - no Unsplash URL
+        presentationText.length > 0 ? presentationText : undefined // Pass presentation text
+      )
 
       const completedVisual: SentenceVisual = {
-          ...result,
+        ...result,
         status: 'completed',
-          approved: false,
+        approved: false,
         mode: 'gpt',
         transitionType: transitionType,
         subtitleSettings: {
@@ -220,18 +369,16 @@ export function VisualGallery({
           fontSize: subtitleFontSize,
           zoom: subtitleZoom,
         },
-          prompt: result.prompt || prompt || undefined,
-          subtitleText: subtitleText || sentence.text,
+        prompt: result.prompt || prompt || undefined,
+        subtitleText: subtitleText || sentence.text,
+        presentationText: presentationText.length > 0 ? presentationText : undefined,
+        imageSource: 'ai',
       }
 
       setVisual(completedVisual)
       onVisualUpdate(sentence.id, completedVisual)
-        setPrompt(result.prompt || prompt || '')
-        toast.success('✅ Static video generated! Review and click Approve.')
-      } else {
-        // VEO 3 mode
-        toast.info('VEO 3 generation not implemented yet')
-      }
+      setPrompt(result.prompt || prompt || '')
+      toast.success('? GPT Static video generated with DALL-E! Review and click Approve.')
     } catch (error: any) {
       console.error('Video generation failed:', error)
       toast.error(error.message || 'Failed to generate video')
@@ -249,9 +396,110 @@ export function VisualGallery({
     }
   }
 
+  const handleGenerateUnsplash = async () => {
+    // FIXED UNSPLASH GENERATION - ALWAYS uses Unsplash image
+    if (isGenerating) return
+
+    // Validate Unsplash image is selected
+    if (!selectedUnsplashImage || !selectedUnsplashImage.url) {
+      toast.error('Please select an image from Unsplash first')
+      setShowUnsplashSearch(true)
+      return
+    }
+
+    setIsGenerating(true)
+    setProgress(0)
+
+    try {
+      // ALWAYS use Unsplash image (NEVER DALL-E)
+      const transformedImages = images?.map(img => ({
+        title: img.title || img.caption || '',
+        description: img.description || '',
+      })) || undefined
+
+      console.log('?? FIXED UNSPLASH BUTTON: Generating with Unsplash image:', {
+        imageSource: 'unsplash',
+        willUseDALL_E: false,
+        willUseUnsplash: true,
+        unsplashImageUrl: selectedUnsplashImage.url,
+        unsplashImageId: selectedUnsplashImage.id,
+      })
+
+      const result = await gptStaticVideoService.generateStaticVideo(
+        sentence.text,
+        6, // duration
+        typeof context === 'string' ? { fullScript: context } : context,
+        'none', // zoomEffect
+        transitionType,
+        {
+          yPosition: subtitleYPosition,
+          fontSize: subtitleFontSize,
+          zoom: subtitleZoom,
+        },
+        subtitleText || sentence.text,
+        undefined, // NO custom prompt for Unsplash
+        tables,
+        transformedImages,
+        'unsplash', // FIXED: ALWAYS 'unsplash' for Unsplash button
+        selectedUnsplashImage.url, // FIXED: REQUIRED Unsplash URL
+        presentationText.length > 0 ? presentationText : undefined // Pass presentation text
+      )
+
+      const completedVisual: SentenceVisual = {
+        ...result,
+        status: 'completed',
+        approved: false,
+        mode: 'unsplash',
+        transitionType: transitionType,
+        subtitleSettings: {
+          yPosition: subtitleYPosition,
+          fontSize: subtitleFontSize,
+          zoom: subtitleZoom,
+        },
+        prompt: result.prompt || prompt || undefined,
+        subtitleText: subtitleText || sentence.text,
+        presentationText: presentationText.length > 0 ? presentationText : undefined,
+        imageSource: 'unsplash',
+        unsplashImageData: selectedUnsplashImage ? {
+          id: selectedUnsplashImage.id,
+          url: selectedUnsplashImage.url,
+          photographer: selectedUnsplashImage.photographer,
+          photographerUsername: selectedUnsplashImage.photographerUsername,
+          photographerUrl: selectedUnsplashImage.photographerUrl,
+          unsplashUrl: selectedUnsplashImage.unsplashUrl,
+          description: selectedUnsplashImage.description,
+        } : undefined,
+      }
+
+      setVisual(completedVisual)
+      onVisualUpdate(sentence.id, completedVisual)
+      setPrompt(result.prompt || prompt || '')
+      toast.success('? Unsplash video generated! Review and click Approve.')
+    } catch (error: any) {
+      console.error('Unsplash video generation failed:', error)
+      toast.error(error.message || 'Failed to generate Unsplash video')
+      if (visual) {
+        const failedVisual: SentenceVisual = {
+          ...visual,
+          status: 'failed',
+        }
+        setVisual(failedVisual)
+        onVisualUpdate(sentence.id, failedVisual)
+      }
+    } finally {
+      setIsGenerating(false)
+      setProgress(0)
+    }
+  }
+
   const handleRegenerate = async () => {
     toast.info('Regenerating video...')
-    await handleGenerate()
+    // Regenerate using the same mode as the current visual
+    if (visual?.mode === 'unsplash' && selectedUnsplashImage) {
+      await handleGenerateUnsplash()
+    } else {
+      await handleGenerateGPT()
+    }
   }
 
   const handlePreviewPrompt = async () => {
@@ -287,7 +535,7 @@ export function VisualGallery({
       })
 
       setPrompt(generatedPrompt)
-      toast.success('✅ Prompt generated! Review it above, then click "Generate Static" to create the video.')
+      toast.success('? Prompt generated! Review it above, then click "Generate Static" to create the video.')
     } catch (error: any) {
       console.error('Prompt preview failed:', error)
       const errorMessage = error.response?.data?.message || error.message || 'Failed to generate prompt preview'
@@ -351,24 +599,34 @@ export function VisualGallery({
     if (!visual) return
 
     // CRITICAL: Ensure we preserve ALL properties including videoUrl and imageUrl
+    // CRITICAL: Save current subtitle settings (from state, not visual) to ensure latest values are saved
     const approvedVisual: SentenceVisual = {
       ...visual,
       status: 'approved',
       approved: true,
       mode: visual.mode, // Preserve mode
       transitionType: visual.transitionType || transitionType, // Preserve transition
-      // CRITICAL: Always save subtitle settings (for all modes with subtitles)
-        subtitleSettings: {
-          yPosition: subtitleYPosition,
-          fontSize: subtitleFontSize,
-          zoom: subtitleZoom,
-        },
+      // CRITICAL: Always save CURRENT subtitle settings (from state, not visual) - this ensures latest edits are saved
+      subtitleSettings: {
+        yPosition: subtitleYPosition,
+        fontSize: subtitleFontSize,
+        zoom: subtitleZoom,
+      },
       // Preserve editable subtitle text and prompt
       subtitleText: subtitleText || visual.subtitleText || sentence.text,
       prompt: prompt || visual.prompt,
     }
 
+    // Update refs to track what we've saved
+    lastSavedSettingsRef.current = {
+      yPosition: subtitleYPosition,
+      fontSize: subtitleFontSize,
+      zoom: subtitleZoom,
+      subtitleText: subtitleText || visual.subtitleText || sentence.text,
+    }
+
     setVisual(approvedVisual)
+    // CRITICAL: Save to parent/session when approving (this is the only save point for subtitle settings)
     onVisualUpdate(sentence.id, approvedVisual)
     
     onApprove(sentence.id)
@@ -376,8 +634,8 @@ export function VisualGallery({
     // AUTO-GENERATE AUDIO when video is approved
     const audioText = subtitleText || sentence.text
     if (onAudioUpdate && audioText && !sentence.audio?.audioUrl && !sentence.audio?.audioBase64) {
-      console.log('🎵 Auto-generating audio for approved video...', sentence.id)
-      toast.info('🎵 Auto-generating audio narration for this video...')
+      console.log('?? Auto-generating audio for approved video...', sentence.id)
+      toast.info('?? Auto-generating audio narration for this video...')
       
       try {
         const { elevenLabsService } = await import('@/services/elevenLabsService')
@@ -395,16 +653,16 @@ export function VisualGallery({
         }
 
         onAudioUpdate(sentence.id, autoGeneratedAudio)
-        toast.success('✅ Audio auto-generated and auto-approved! Ready for assembly.')
+        toast.success('? Audio auto-generated and auto-approved! Ready for assembly.')
       } catch (error) {
-        console.error('❌ Auto-audio generation failed:', error)
+        console.error('? Auto-audio generation failed:', error)
         toast.error('Failed to auto-generate audio. You can generate it manually.')
       }
     }
     
     toast.success(visual.mode === 'gpt' 
-      ? `✅ Video approved and exported to Video Assembly! Subtitle settings saved (Position: ${Math.round(subtitleYPosition)}px, Size: ${Math.round(subtitleZoom * 100)}%)` 
-      : '✅ Video approved and exported to Video Assembly!')
+      ? `? Video approved and exported to Video Assembly! Subtitle settings saved (Position: ${Math.round(subtitleYPosition)}px, Size: ${Math.round(subtitleZoom * 100)}%)` 
+      : '? Video approved and exported to Video Assembly!')
   }
 
   const handleReject = () => {
@@ -456,7 +714,7 @@ export function VisualGallery({
           <div className="flex gap-2 items-center">
             {visual?.mode && (
               <Badge variant="secondary" className="text-xs">
-                {visual.mode === 'gpt' ? '🎨 GPT Static' : '🎬 VEO 3'}
+                {visual.mode === 'gpt' ? '?? GPT Static' : '?? Unsplash AI'}
               </Badge>
             )}
             {getStatusBadge()}
@@ -464,9 +722,10 @@ export function VisualGallery({
         </div>
       </CardHeader>
       <CardContent className="space-y-4">
-        {/* PROMPT FIELD - ALWAYS VISIBLE */}
-        <div className="mb-6 space-y-4">
-          <div className="rounded-lg border-2 border-border bg-card shadow-sm overflow-hidden">
+        {/* PROMPT FIELD (only for AI generation mode) */}
+        {imageSource === 'ai' && (
+          <div className="mb-6 space-y-4">
+            <div className="rounded-lg border-2 border-border bg-card shadow-sm overflow-hidden">
             {/* Header Section */}
             <div className="px-4 py-3 bg-muted/50 border-b border-border">
               <div className="flex items-center justify-between gap-3">
@@ -579,8 +838,9 @@ export function VisualGallery({
                 </div>
               </div>
             </div>
+            </div>
           </div>
-        </div>
+        )}
 
         {/* Video Preview */}
         <div className="relative w-full aspect-video bg-muted rounded-lg overflow-hidden">
@@ -598,11 +858,37 @@ export function VisualGallery({
                   transformOrigin: 'center center',
                 }}
               />
-              {visual.mode === 'gpt' && (
+              {(visual.mode === 'gpt' || visual.mode === 'unsplash') && (
                 <div className="absolute top-2 left-2 z-10 pointer-events-none">
                   <Badge variant="secondary" className="text-xs bg-black/70 text-white border border-white/20">
-                    🎨 GPT Static • Video: {(videoZoom * 100).toFixed(0)}% • Sub: {(subtitleZoom * 100).toFixed(0)}%
+                    {visual.mode === 'unsplash' || visual.imageSource === 'unsplash' ? '?? Unsplash AI' : '?? GPT Static'} � Video: {(videoZoom * 100).toFixed(0)}% � Sub: {(subtitleZoom * 100).toFixed(0)}%
                   </Badge>
+                </div>
+              )}              {/* Text overlay completely removed */}
+              {/* Text overlay completely removed */}
+              {(visual.mode === 'unsplash' || (visual.mode === 'gpt' && visual.imageSource === 'unsplash')) && visual.unsplashImageData && (
+                <div className="absolute bottom-2 right-2 z-10 pointer-events-none">
+                  <div className="bg-black/70 text-white text-xs px-2 py-1 rounded border border-white/20">
+                    Photo by{' '}
+                    <a
+                      href={visual.unsplashImageData.photographerUrl}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="underline pointer-events-auto"
+                    >
+                      {visual.unsplashImageData.photographer}
+                    </a>{' '}
+                    on{' '}
+                    <a
+                      href={visual.unsplashImageData.unsplashUrl}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="underline pointer-events-auto"
+                      onClick={(e) => e.stopPropagation()}
+                    >
+                      Unsplash
+                    </a>
+                  </div>
                 </div>
               )}
             </div>
@@ -642,44 +928,148 @@ export function VisualGallery({
               GPT Static
             </Button>
             <Button
-              variant={selectedMode === 'veo3' ? 'default' : 'outline'}
+              variant={selectedMode === 'unsplash' ? 'default' : 'outline'}
               size="sm"
-              onClick={() => setSelectedMode('veo3')}
+              onClick={() => {
+                setSelectedMode('unsplash')
+                setImageSource('unsplash')
+                setShowUnsplashSearch(true)
+              }}
               disabled={isGenerating || visual?.status === 'completed'}
               className="flex-1"
             >
-              <Video className="h-4 w-4 mr-2" />
-              VEO 3 Cinematic
+              <ImageIcon className="h-4 w-4 mr-2" />
+              Unsplash AI
             </Button>
           </div>
           <p className="text-xs text-muted-foreground mt-1">
             {selectedMode === 'gpt' 
-              ? '🎨 Static: Academic visuals with DALL-E 3 (faster, cheaper)' 
-              : '🎬 Cinematic: AI-generated video clips (slower, premium)'}
+              ? '?? Static: Academic visuals with DALL-E 3 (faster, cheaper)' 
+              : '?? Unsplash: High-quality images from Unsplash library'}
           </p>
         </div>
 
-        {/* Transition Selection */}
-        <div className="mb-4">
-          <label className="text-sm font-medium mb-2 block">Transition to Next Scene:</label>
-          <p className="text-xs text-muted-foreground mb-2">Transitions will be applied during final video export</p>
-          <div className="flex gap-2">
-            {(['fade', 'slide', 'dissolve', 'none'] as const).map((transition) => (
+        {/* Image Source Selection (only for GPT Static mode) */}
+        {selectedMode === 'gpt' && (
+          <div className="mb-4">
+            <label className="text-sm font-medium mb-2 block">Image Source:</label>
+            <div className="flex gap-2">
               <Button
-                key={transition}
-                variant={transitionType === transition ? 'default' : 'outline'}
+                variant={imageSource === 'ai' ? 'default' : 'outline'}
                 size="sm"
-                onClick={() => setTransitionType(transition)}
-                className="flex-1 capitalize"
+                onClick={() => {
+                  setImageSource('ai')
+                  setShowUnsplashSearch(false)
+                }}
+                disabled={isGenerating || visual?.status === 'completed'}
+                className="flex-1"
               >
-                {transition}
+                <Sparkles className="h-4 w-4 mr-2" />
+                AI Generation
               </Button>
-            ))}
+              <Button
+                variant={imageSource === 'unsplash' ? 'default' : 'outline'}
+                size="sm"
+                onClick={() => {
+                  setImageSource('unsplash')
+                  setShowUnsplashSearch(true)
+                }}
+                disabled={isGenerating || visual?.status === 'completed'}
+                className="flex-1"
+              >
+                <ImageIcon className="h-4 w-4 mr-2" />
+                Unsplash Search
+              </Button>
+            </div>
+            <p className="text-xs text-muted-foreground mt-1">
+              {imageSource === 'ai' 
+                ? '?? Generate images using AI (DALL-E 3)' 
+                : '?? Search and select from high-quality Unsplash library'}
+            </p>
           </div>
-        </div>
+        )}
 
-        {/* Live Controls (only show after GPT video is generated) */}
-        {visual?.status === 'completed' && visual?.mode === 'gpt' && (
+        {/* Unsplash Image Search */}
+        {selectedMode === 'unsplash' && showUnsplashSearch && (
+          <div className="mb-4 p-4 border rounded-lg bg-card">
+            <UnsplashImageSearch
+              sentence={sentence.text}
+              context={typeof context === 'string' ? { fullScript: context } : context}
+              onSelectImage={(imageData) => {
+                setSelectedUnsplashImage(imageData)
+                setShowUnsplashSearch(false)
+                toast.success('Image selected! Click Generate to create video.')
+              }}
+              onCancel={() => setShowUnsplashSearch(false)}
+            />
+          </div>
+        )}
+
+        {/* Selected Unsplash Image Info */}
+        {selectedMode === 'unsplash' && selectedUnsplashImage && !showUnsplashSearch && (
+          <div className="mb-4 p-3 border rounded-lg bg-muted/50">
+            <div className="flex items-start justify-between gap-2">
+              <div className="flex-1">
+                <p className="text-sm font-medium mb-1">Selected Image</p>
+                <div className="flex items-center gap-2 mb-2">
+                  <img
+                    src={selectedUnsplashImage.url}
+                    alt={selectedUnsplashImage.description || 'Selected image'}
+                    className="w-16 h-10 object-cover rounded"
+                  />
+                  <div className="flex-1 min-w-0">
+                    <p className="text-xs text-muted-foreground line-clamp-1">
+                      {selectedUnsplashImage.description || 'No description'}
+                    </p>
+                    <p className="text-xs text-primary mt-0.5">
+                      Photo by{' '}
+                      <a
+                        href={selectedUnsplashImage.photographerUrl}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="hover:underline"
+                      >
+                        {selectedUnsplashImage.photographer}
+                      </a>{' '}
+                      on{' '}
+                      <a
+                        href={selectedUnsplashImage.unsplashUrl}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="hover:underline"
+                      >
+                        Unsplash
+                      </a>
+                    </p>
+                  </div>
+                </div>
+              </div>
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => {
+                  setSelectedUnsplashImage(null)
+                  setShowUnsplashSearch(true)
+                }}
+                disabled={isGenerating || visual?.status === 'completed'}
+              >
+                <X className="h-4 w-4" />
+              </Button>
+            </div>
+          </div>
+        )}
+
+        {/* Note: All editing controls (subtitle settings, transitions, etc.) are now in the Final Video Editor */}
+        {visual?.status === 'completed' && (
+          <div className="mb-4 p-3 bg-muted/50 rounded-md border border-border">
+            <p className="text-xs text-muted-foreground text-center">
+              💡 Subtitle settings, transitions, and text editing are available in the Final Video Editor
+            </p>
+          </div>
+        )}
+
+        {/* REMOVED: All editing controls moved to Final Video Editor */}
+        {false && visual?.status === 'completed' && (visual?.mode === 'gpt' || visual?.mode === 'unsplash') && (
           <div className="mb-6 space-y-4">
             <div className="rounded-lg border-2 border-border bg-card shadow-sm overflow-hidden">
               {/* Header */}
@@ -711,7 +1101,7 @@ export function VisualGallery({
                 <div className="space-y-2">
                   <div className="flex items-center justify-between">
                     <label className="text-sm font-medium text-foreground flex items-center gap-2">
-                      <span>🎬</span>
+                      <span>??</span>
                       <span>Video Zoom</span>
                     </label>
                     <span className="text-sm font-semibold text-primary">{Math.round(videoZoom * 100)}%</span>
@@ -764,7 +1154,7 @@ export function VisualGallery({
                 <div className="space-y-2">
                   <div className="flex items-center justify-between">
                     <label className="text-sm font-medium text-foreground flex items-center gap-2">
-                      <span>📝</span>
+                      <span>??</span>
                       <span>Subtitle Size</span>
                     </label>
                     <span className="text-sm font-semibold text-primary">{Math.round(subtitleZoom * 100)}%</span>
@@ -813,10 +1203,63 @@ export function VisualGallery({
                 {/* Divider */}
                 <div className="border-t border-border"></div>
 
+                {/* Subtitle Font Size Control */}
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between">
+                    <label className="text-sm font-medium text-foreground flex items-center gap-2">
+                      <span>🔤</span>
+                      <span>Font Size</span>
+                    </label>
+                    <span className="text-sm font-semibold text-primary">{subtitleFontSize}px</span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => setSubtitleFontSize(Math.max(12, subtitleFontSize - 2))}
+                      disabled={subtitleFontSize <= 12}
+                      className="h-8 w-8 p-0"
+                    >
+                      -
+                    </Button>
+                    <div className="flex-1">
+                      <input
+                        type="range"
+                        min="12"
+                        max="72"
+                        step="2"
+                        value={subtitleFontSize}
+                        onChange={(e) => setSubtitleFontSize(parseInt(e.target.value))}
+                        className="w-full h-2 bg-muted rounded-lg appearance-none cursor-pointer accent-primary"
+                      />
+                    </div>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => setSubtitleFontSize(Math.min(72, subtitleFontSize + 2))}
+                      disabled={subtitleFontSize >= 72}
+                      className="h-8 w-8 p-0"
+                    >
+                      +
+                    </Button>
+                    <Button
+                      variant="secondary"
+                      size="sm"
+                      onClick={() => setSubtitleFontSize(42)}
+                      className="h-8 px-3"
+                    >
+                      Reset
+                    </Button>
+                  </div>
+                </div>
+
+                {/* Divider */}
+                <div className="border-t border-border"></div>
+
                 {/* Subtitle Text Control */}
                 <div className="space-y-2">
                   <label className="text-sm font-medium text-foreground flex items-center gap-2">
-                    <span>✏️</span>
+                    <span>??</span>
                     <span>Subtitle Text</span>
                   </label>
                   <Textarea
@@ -843,11 +1286,44 @@ export function VisualGallery({
                 {/* Divider */}
                 <div className="border-t border-border"></div>
 
+                {/* Presentation Text (Bullet Points) Control */}
+                <div className="space-y-2">
+                  <label className="text-sm font-medium text-foreground flex items-center gap-2">
+                    <span>📝</span>
+                    <span>Presentation Text (Bullet Points)</span>
+                  </label>
+                  <Textarea
+                    value={presentationText.join('\n')}
+                    onChange={(e) => {
+                      const lines = e.target.value.split('\n').filter(line => line.trim().length > 0)
+                      setPresentationText(lines)
+                      // Auto-save to visual if it exists
+                      if (visual) {
+                        const updatedVisual: SentenceVisual = {
+                          ...visual,
+                          presentationText: lines.length > 0 ? lines : undefined,
+                        }
+                        setVisual(updatedVisual)
+                        onVisualUpdate(sentence.id, updatedVisual)
+                      }
+                    }}
+                    placeholder="One bullet point per line. These appear at the top of the video."
+                    className="min-h-[100px] text-sm resize-y bg-background border-border font-mono"
+                    disabled={isGenerating}
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    One bullet point per line. These will be baked into the video center.
+                  </p>
+                </div>
+
+                {/* Divider */}
+                <div className="border-t border-border"></div>
+
                 {/* Subtitle Position Control */}
                 <div className="space-y-3">
                   <div className="flex items-center justify-between">
                     <label className="text-sm font-medium text-foreground flex items-center gap-2">
-                      <span>📍</span>
+                      <span>??</span>
                       <span>Subtitle Position</span>
                     </label>
                     <span className="text-sm font-semibold text-primary">
@@ -921,26 +1397,104 @@ export function VisualGallery({
           </div>
         )}
 
-        {/* Action Buttons */}
+        {/* Presentation Text (Bullet Points) - BEFORE Generation */}
+        {(!visual || visual?.status === 'pending' || visual?.status === 'failed') && !visual?.approved && (
+          <div className="mb-4 p-4 border rounded-lg bg-card">
+            <div className="space-y-2">
+              <div className="flex items-center justify-between">
+                <label className="text-sm font-medium text-foreground flex items-center gap-2">
+                  <span>📝</span>
+                  <span>Presentation Text (Bullet Points)</span>
+                </label>
+                {presentationText.length === 0 && (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={generateBulletPointsForSentence}
+                    disabled={isGeneratingBulletPoints || isGenerating}
+                    className="h-7 text-xs"
+                  >
+                    {isGeneratingBulletPoints ? (
+                      <>
+                        <Loader2 className="h-3 w-3 mr-1 animate-spin" />
+                        Generating...
+                      </>
+                    ) : (
+                      <>✨ Auto-Generate</>
+                    )}
+                  </Button>
+                )}
+              </div>
+              <Textarea
+                value={presentationText.join('\n')}
+                onChange={(e) => {
+                  const lines = e.target.value.split('\n').filter(line => line.trim().length > 0)
+                  setPresentationText(lines)
+                  // Auto-save to visual if it exists
+                  if (visual) {
+                    const updatedVisual: SentenceVisual = {
+                      ...visual,
+                      presentationText: lines.length > 0 ? lines : undefined,
+                    }
+                    setVisual(updatedVisual)
+                    onVisualUpdate(sentence.id, updatedVisual)
+                  }
+                }}
+                placeholder={isGeneratingBulletPoints ? "Generating bullet points using Gemini AI..." : "One bullet point per line. Click 'Generate Bullet Points' to auto-generate from the sentence or type your own."}
+                className="min-h-[100px] text-sm resize-y bg-background border-border font-mono"
+                disabled={isGenerating || isGeneratingBulletPoints}
+              />
+              <p className="text-xs text-muted-foreground">
+                Optional: One bullet point per line. Click "Generate Bullet Points" to auto-generate from the sentence using Gemini AI. If provided, bullet points will be baked into the center of the video. You can also type your own or leave empty.
+              </p>
+            </div>
+          </div>
+        )}
+
+        {/* Action Buttons - TWO FIXED BUTTONS */}
         <div className="flex flex-wrap gap-2">
           {(!visual || visual?.status === 'pending' || visual?.status === 'failed') && !visual?.approved ? (
-            <Button
-              onClick={handleGenerate}
-              disabled={isGenerating}
-              className="flex-1 min-w-[100px]"
-            >
-              {isGenerating ? (
-                <>
-                  <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                  Generating...
-                </>
-              ) : (
-                <>
-                  <ImageIcon className="h-4 w-4 mr-2" />
-                  Generate Static
-                </>
-              )}
-            </Button>
+            <>
+              {/* FIXED GPT BUTTON - Always generates with DALL-E */}
+              <Button
+                onClick={handleGenerateGPT}
+                disabled={isGenerating}
+                variant="default"
+                className="flex-1 min-w-[150px]"
+              >
+                {isGenerating ? (
+                  <>
+                    <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                    Generating...
+                  </>
+                ) : (
+                  <>
+                    <ImageIcon className="h-4 w-4 mr-2" />
+                    Generate Static (GPT)
+                  </>
+                )}
+              </Button>
+              
+              {/* FIXED UNSPLASH BUTTON - Always generates with Unsplash */}
+              <Button
+                onClick={handleGenerateUnsplash}
+                disabled={isGenerating || !selectedUnsplashImage}
+                variant="outline"
+                className="flex-1 min-w-[150px]"
+              >
+                {isGenerating ? (
+                  <>
+                    <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                    Generating...
+                  </>
+                ) : (
+                  <>
+                    <Sparkles className="h-4 w-4 mr-2" />
+                    Generate Unsplash Videos
+                  </>
+                )}
+              </Button>
+            </>
           ) : null}
           
           {visual?.status === 'completed' && !visual.approved && (

@@ -111,8 +111,10 @@ export function BackgroundMusicComponent({
         setCurrentTime(0)
       })
       audio.addEventListener('error', (e) => {
-        console.error('Audio playback error:', e)
-        toast.error('Failed to play audio')
+        const error = e as ErrorEvent
+        console.error('Audio playback error:', error)
+        // Don't show error toast for common non-fatal errors (user might have paused or URL invalid)
+        // Only log it - the play() catch will handle user-initiated playback errors
         setIsPlaying(false)
       })
       audioRef.current = audio

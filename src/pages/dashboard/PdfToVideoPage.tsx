@@ -1,4 +1,5 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
+import { useSearchParams } from "react-router-dom";
 import { DashboardLayout } from "@/pages/Dashboard";
 import {
   Card,
@@ -25,13 +26,264 @@ import {
   Home,
   Video,
   Image as ImageIcon,
+  History,
 } from "lucide-react";
 import { toast } from "sonner";
+import { useNavigate } from "react-router-dom";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { Textarea } from "@/components/ui/textarea";
+import { Label } from "@/components/ui/label";
 import { grobidApi, CompleteExtractedData, LLMExtractionResponse } from '@/services/grobidApi';
 import { geminiService, ScriptData } from '@/services/geminiService';
 import { ScriptSelection } from '@/components/script-generation/ScriptSelection';
 import { SimpleScriptEditor } from '@/components/script-generation/SimpleScriptEditor';
 import { ImageViewer } from '@/components/script-generation/ImageViewer';
+import { ThesisSessionList } from '@/components/ThesisSessionList';
+import { thesisSessionService, ThesisSession } from '@/services/thesisSessionService';
+import { distributionService } from '@/services/distributionService';
+import { snsService } from '@/services/snsService';
+
+// Helper: Convert blob URL to base64
+const blobUrlToBase64 = async (blobUrl: string): Promise<string | undefined> => {
+  try {
+    if (!blobUrl || (!blobUrl.startsWith('blob:') && !blobUrl.startsWith('data:'))) {
+      return undefined;
+    }
+    
+    const response = await fetch(blobUrl);
+    const blob = await response.blob();
+    
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onloadend = () => {
+        const base64 = reader.result as string;
+        // Extract base64 data (remove data:video/mp4;base64, prefix)
+        const base64Data = base64.split(',')[1];
+        resolve(base64Data);
+      };
+      reader.onerror = reject;
+      reader.readAsDataURL(blob);
+    });
+  } catch (error) {
+    console.warn('Failed to convert blob URL to base64:', error);
+    return undefined;
+  }
+};
+
+// Helper: Convert base64 to blob URL
+const base64ToBlobUrl = (base64: string, mimeType: string): string => {
+  const byteCharacters = atob(base64);
+  const byteNumbers = new Array(byteCharacters.length);
+  for (let i = 0; i < byteCharacters.length; i++) {
+    byteNumbers[i] = byteCharacters.charCodeAt(i);
+  }
+  const byteArray = new Uint8Array(byteNumbers);
+  const blob = new Blob([byteArray], { type: mimeType });
+  return URL.createObjectURL(blob);
+};
+
+// Convert blob URLs to base64 before saving to database
+// CRITICAL: Preserve ALL data - never lose information
+const convertBlobsToBase64ForDB = async (script: ScriptData | null): Promise<ScriptData | null> => {
+  if (!script) return null;
+  
+  const processedSentences = await Promise.all(
+    script.sentences.map(async (s) => {
+      // PRESERVE existing base64 first (from database restore)
+      let videoBase64: string | undefined = s.visual?.videoBase64;
+      let imageBase64: string | undefined = s.visual?.imageBase64;
+      let videoUrl = s.visual?.videoUrl;
+      let imageUrl = s.visual?.imageUrl;
+      let thumbnailUrl = s.visual?.thumbnailUrl;
+      
+      // Only convert blob URLs to base64 if we don't already have base64
+      if (s.visual?.videoUrl && !videoBase64) {
+        if (s.visual.videoUrl.startsWith('blob:') || s.visual.videoUrl.startsWith('data:')) {
+          const base64 = await blobUrlToBase64(s.visual.videoUrl);
+          if (base64) {
+            videoBase64 = base64;
+            videoUrl = undefined; // Remove blob URL, keep base64
+          }
+        } else if (s.visual.videoUrl.startsWith('http://') || s.visual.videoUrl.startsWith('https://')) {
+          videoUrl = s.visual.videoUrl; // Keep HTTP/HTTPS URLs
+        }
+      }
+      
+      if (s.visual?.imageUrl && !imageBase64) {
+        if (s.visual.imageUrl.startsWith('blob:') || s.visual.imageUrl.startsWith('data:')) {
+          const base64 = await blobUrlToBase64(s.visual.imageUrl);
+          if (base64) {
+            imageBase64 = base64;
+            imageUrl = undefined;
+          }
+        } else if (s.visual.imageUrl.startsWith('http://') || s.visual.imageUrl.startsWith('https://')) {
+          imageUrl = s.visual.imageUrl;
+        }
+      }
+      
+      // PRESERVE existing audio base64
+      let audioBase64 = s.audio?.audioBase64;
+      let audioUrl = s.audio?.audioUrl;
+      
+      // Only convert blob URLs to base64 if we don't already have base64
+      if (s.audio?.audioUrl && !audioBase64) {
+        if (s.audio.audioUrl.startsWith('blob:') || s.audio.audioUrl.startsWith('data:')) {
+          const base64 = await blobUrlToBase64(s.audio.audioUrl);
+          if (base64) {
+            audioBase64 = base64;
+            audioUrl = undefined;
+          }
+        } else if (s.audio.audioUrl.startsWith('http://') || s.audio.audioUrl.startsWith('https://')) {
+          audioUrl = s.audio.audioUrl;
+        }
+      }
+      
+      // PRESERVE ALL visual properties
+      const visual = s.visual ? {
+        ...s.visual, // Spread all existing properties first
+        videoUrl, // Update URL (might be undefined if converted to base64)
+        imageUrl, // Update URL (might be undefined if converted to base64)
+        thumbnailUrl, // Preserve thumbnail
+        videoBase64: videoBase64 || s.visual.videoBase64, // Preserve or use converted base64
+        imageBase64: imageBase64 || s.visual.imageBase64, // Preserve or use converted base64
+        approved: s.visual.approved === true || s.visual.status === 'approved',
+        status: (s.visual.status === 'approved' || s.visual.approved) ? 'approved' as const : (s.visual.status || 'pending') as 'pending' | 'generating' | 'completed' | 'failed' | 'approved' | 'rejected',
+        // Preserve all other properties explicitly
+        videoId: s.visual.videoId,
+        mode: s.visual.mode,
+        transitionType: s.visual.transitionType,
+        subtitleSettings: s.visual.subtitleSettings,
+        subtitleText: s.visual.subtitleText,
+        uploaded: s.visual.uploaded,
+        prompt: s.visual.prompt,
+      } : s.visual;
+      
+      // PRESERVE ALL audio properties
+      const audio = s.audio ? {
+        ...s.audio, // Spread all existing properties first
+        audioUrl, // Update URL (might be undefined if converted to base64)
+        audioBase64: audioBase64 || s.audio.audioBase64, // Preserve or use converted base64
+        approved: s.audio.approved === true || s.audio.status === 'approved',
+        status: (s.audio.status === 'approved' || s.audio.approved) ? 'approved' as const : (s.audio.status || 'pending') as 'pending' | 'generating' | 'completed' | 'failed' | 'approved' | 'rejected',
+        // Preserve other audio properties
+        duration: s.audio.duration,
+        isCustom: s.audio.isCustom,
+      } : s.audio;
+      
+      return {
+        ...s, // Spread all sentence properties
+        visual,
+        audio,
+      };
+    })
+  );
+  
+  // PRESERVE finalVideo and backgroundMusic
+  let finalVideo = script.finalVideo;
+  if (script.finalVideo?.videoUrl && !script.finalVideo.videoBase64) {
+    if (script.finalVideo.videoUrl.startsWith('blob:') || script.finalVideo.videoUrl.startsWith('data:')) {
+      const base64 = await blobUrlToBase64(script.finalVideo.videoUrl);
+      if (base64) {
+        finalVideo = {
+          ...script.finalVideo,
+          videoBase64: base64,
+          videoUrl: undefined,
+        };
+      }
+    }
+  }
+  
+  let backgroundMusic = script.backgroundMusic;
+  if (script.backgroundMusic?.audioUrl && !script.backgroundMusic.audioBase64) {
+    if (script.backgroundMusic.audioUrl.startsWith('blob:') || script.backgroundMusic.audioUrl.startsWith('data:')) {
+      const base64 = await blobUrlToBase64(script.backgroundMusic.audioUrl);
+      if (base64) {
+        backgroundMusic = {
+          ...script.backgroundMusic,
+          audioBase64: base64,
+          audioUrl: undefined,
+        };
+      }
+    }
+  }
+  
+  return {
+    ...script, // Spread all script properties
+    sentences: processedSentences,
+    finalVideo: finalVideo || script.finalVideo,
+    backgroundMusic: backgroundMusic || script.backgroundMusic,
+  };
+};
+
+// Convert base64 back to blob URLs when loading from database
+// CRITICAL: Preserve videoBase64 field so backend can use it - only create blob URLs for frontend display
+const convertBase64ToBlobsFromDB = (script: ScriptData | null): ScriptData | null => {
+  if (!script) return null;
+  
+  return {
+    ...script,
+    sentences: script.sentences.map(s => {
+      const visual = s.visual ? {
+        ...s.visual,
+        // Preserve original HTTP/HTTPS URLs, only create blob URLs if we have base64 but no URL
+        videoUrl: s.visual.videoUrl && (s.visual.videoUrl.startsWith('http://') || s.visual.videoUrl.startsWith('https://'))
+          ? s.visual.videoUrl
+          : (s.visual.videoBase64 ? base64ToBlobUrl(s.visual.videoBase64, 'video/mp4') : s.visual.videoUrl),
+        imageUrl: s.visual.imageUrl && (s.visual.imageUrl.startsWith('http://') || s.visual.imageUrl.startsWith('https://'))
+          ? s.visual.imageUrl
+          : (s.visual.imageBase64 ? base64ToBlobUrl(s.visual.imageBase64, 'image/png') : s.visual.imageUrl),
+        thumbnailUrl: s.visual.thumbnailUrl || s.visual.imageUrl || (s.visual.imageBase64 ? base64ToBlobUrl(s.visual.imageBase64, 'image/png') : undefined),
+        // CRITICAL: Preserve videoBase64 and imageBase64 - backend needs these!
+        videoBase64: s.visual.videoBase64,
+        imageBase64: s.visual.imageBase64,
+        approved: s.visual.approved === true || s.visual.status === 'approved',
+        status: (s.visual.status === 'approved' || s.visual.approved) ? 'approved' as const : (s.visual.status || 'pending') as 'pending' | 'generating' | 'completed' | 'failed' | 'approved' | 'rejected',
+      } : s.visual;
+      
+      const audio = s.audio ? {
+        ...s.audio,
+        audioUrl: s.audio.audioUrl && (s.audio.audioUrl.startsWith('http://') || s.audio.audioUrl.startsWith('https://'))
+          ? s.audio.audioUrl
+          : (s.audio.audioBase64 ? base64ToBlobUrl(s.audio.audioBase64, 'audio/mpeg') : s.audio.audioUrl),
+        // CRITICAL: Preserve audioBase64 - backend needs this!
+        audioBase64: s.audio.audioBase64,
+        approved: s.audio.approved === true || s.audio.status === 'approved',
+        status: (s.audio.status === 'approved' || s.audio.approved) ? 'approved' as const : (s.audio.status || 'pending') as 'pending' | 'generating' | 'completed' | 'failed' | 'approved' | 'rejected',
+      } : s.audio;
+      
+      return {
+        ...s,
+        visual,
+        audio,
+      };
+    }),
+    // CRITICAL: Convert finalVideo base64 back to blob URL for frontend display
+    finalVideo: script.finalVideo ? {
+      ...script.finalVideo,
+      videoUrl: script.finalVideo.videoUrl || (script.finalVideo.videoBase64 ? base64ToBlobUrl(script.finalVideo.videoBase64, 'video/mp4') : undefined),
+      // Preserve videoBase64 and export status - backend needs videoBase64!
+      videoBase64: script.finalVideo.videoBase64,
+      isExported: script.finalVideo.isExported,
+      exportedAt: script.finalVideo.exportedAt,
+    } : script.finalVideo,
+    // Convert backgroundMusic base64 back to blob URL
+    backgroundMusic: script.backgroundMusic ? {
+      ...script.backgroundMusic,
+      audioUrl: script.backgroundMusic.audioUrl || (script.backgroundMusic.audioBase64 ? base64ToBlobUrl(script.backgroundMusic.audioBase64, 'audio/mpeg') : undefined),
+      // Preserve audioBase64 - backend needs this!
+      audioBase64: script.backgroundMusic.audioBase64,
+      volume: script.backgroundMusic.volume,
+      approved: script.backgroundMusic.approved,
+    } : script.backgroundMusic,
+  };
+};
 
 interface ProcessingStep {
   id: string;
@@ -45,58 +297,115 @@ type WorkflowStep = 'upload' | 'extract' | 'preview' | 'script-selection' | 'scr
 // SessionStorage key for persistence
 const PDF_TO_VIDEO_STORAGE_KEY = 'pdf_to_video_workflow_data';
 
-// Save workflow state to sessionStorage
+// Save minimal workflow state to sessionStorage (only lightweight metadata)
+// Large data (scripts, extractedData) is stored in database via thesis sessions
 const saveWorkflowState = (data: {
   currentStep: WorkflowStep;
-  selectedScript: ScriptData | null;
-  threeScripts: ScriptData[];
   sessionId: string | null;
+  thesisSessionId: string | null;
 }) => {
   try {
-    const serialized = JSON.stringify(data);
-    const sizeInMB = new Blob([serialized]).size / (1024 * 1024);
+    // Only save minimal metadata - no large data
+    const minimalData = {
+      currentStep: data.currentStep,
+      sessionId: data.sessionId,
+      thesisSessionId: data.thesisSessionId,
+      timestamp: Date.now(), // For cache invalidation
+    };
     
-    if (sizeInMB > 5) {
-      console.warn('⚠️ Workflow data is large:', sizeInMB.toFixed(2), 'MB');
+    const serialized = JSON.stringify(minimalData);
+    const sizeInKB = new Blob([serialized]).size / 1024;
+    
+    // Should be well under 1KB with minimal data
+    if (sizeInKB > 10) {
+      console.warn('⚠️ Workflow state is larger than expected:', sizeInKB.toFixed(2), 'KB');
     }
     
     sessionStorage.setItem(PDF_TO_VIDEO_STORAGE_KEY, serialized);
-    console.log('💾 Saved workflow state:', {
+    console.log('💾 Saved minimal workflow state to sessionStorage:', {
       step: data.currentStep,
-      scriptId: data.selectedScript?.id || 'default',
-      approvedVisuals: data.selectedScript?.sentences?.filter(s => s.visual?.approved).length || 0,
-      approvedAudio: data.selectedScript?.sentences?.filter(s => s.audio?.approved).length || 0,
+      hasSessionId: !!data.sessionId,
+      hasThesisSessionId: !!data.thesisSessionId,
     });
   } catch (e: any) {
-    console.error('❌ Failed to save workflow state:', e);
+    console.error('❌ Failed to save workflow state to sessionStorage:', e);
     if (e.name === 'QuotaExceededError') {
-      console.error('SessionStorage quota exceeded! Data too large.');
+      console.error('SessionStorage quota exceeded! This should not happen with minimal data. Clearing old data...');
+      // Try to clear and retry once
+      try {
+        sessionStorage.removeItem(PDF_TO_VIDEO_STORAGE_KEY);
+        const minimalData = {
+          currentStep: data.currentStep,
+          sessionId: data.sessionId,
+          thesisSessionId: data.thesisSessionId,
+          timestamp: Date.now(),
+        };
+        sessionStorage.setItem(PDF_TO_VIDEO_STORAGE_KEY, JSON.stringify(minimalData));
+        console.log('✅ Retried save after clearing old data');
+      } catch (retryError) {
+        console.error('❌ Failed to save even after clearing:', retryError);
+      }
     }
   }
 };
 
-// Load workflow state from sessionStorage
+// Load minimal workflow state from sessionStorage
+// Full state restoration happens via database (thesis sessions) if thesisSessionId exists
 const loadWorkflowState = () => {
   try {
     const saved = sessionStorage.getItem(PDF_TO_VIDEO_STORAGE_KEY);
     if (saved) {
       const parsed = JSON.parse(saved);
-      console.log('📂 Restored workflow state:', {
+      
+      // Validate it's the new format (has timestamp) or old format
+      if (parsed.timestamp) {
+        // New format - minimal data
+        const ageInHours = (Date.now() - parsed.timestamp) / (1000 * 60 * 60);
+        if (ageInHours > 24) {
+          // Data older than 24 hours, clear it
+          console.log('🗑️ Clearing stale workflow state (older than 24 hours)');
+          sessionStorage.removeItem(PDF_TO_VIDEO_STORAGE_KEY);
+          return null;
+        }
+        
+        console.log('📂 Restored minimal workflow state from sessionStorage:', {
         step: parsed.currentStep,
-        scriptId: parsed.selectedScript?.id,
-        approvedVisuals: parsed.selectedScript?.sentences?.filter((s: any) => s.visual?.approved).length || 0,
-        approvedAudio: parsed.selectedScript?.sentences?.filter((s: any) => s.audio?.approved).length || 0,
+          hasSessionId: !!parsed.sessionId,
+          hasThesisSessionId: !!parsed.thesisSessionId,
+          ageHours: ageInHours.toFixed(1),
       });
       return parsed;
+      } else {
+        // Old format - migrate to new format by keeping only minimal data
+        console.log('🔄 Migrating old workflow state format to minimal format');
+        const minimal = {
+          currentStep: parsed.currentStep || 'upload',
+          sessionId: parsed.sessionId || null,
+          thesisSessionId: parsed.thesisSessionId || null,
+          timestamp: Date.now(),
+        };
+        sessionStorage.setItem(PDF_TO_VIDEO_STORAGE_KEY, JSON.stringify(minimal));
+        return minimal;
+      }
     }
   } catch (e) {
-    console.warn('Failed to load workflow state:', e);
+    console.warn('Failed to load workflow state from sessionStorage:', e);
+    // Clear corrupted data
+    try {
+      sessionStorage.removeItem(PDF_TO_VIDEO_STORAGE_KEY);
+    } catch (clearError) {
+      // Ignore clear errors
+    }
   }
   return null;
 };
 
 export default function PdfToVideoPage() {
-  // Try to restore from sessionStorage on mount
+  const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
+  const sessionIdFromUrl = searchParams.get('sessionId');
+  
+  // Try to restore minimal state from sessionStorage on mount
   const savedState = loadWorkflowState();
   
   // Workflow state
@@ -108,27 +417,352 @@ export default function PdfToVideoPage() {
   const [uploadedFile, setUploadedFile] = useState<File | null>(null);
   const [extractedData, setExtractedData] = useState<CompleteExtractedData | null>(null);
   const [sessionId, setSessionId] = useState<string | null>(savedState?.sessionId || null);
+  const [thesisSessionId, setThesisSessionId] = useState<string | null>(savedState?.thesisSessionId || null);
   const [error, setError] = useState<string | null>(null);
+  const [showSessionList, setShowSessionList] = useState(false);
+  const [listRefreshTrigger, setListRefreshTrigger] = useState(0);
 
-  // Script Generation state
-  const [threeScripts, setThreeScripts] = useState<ScriptData[]>(savedState?.threeScripts || []);
-  const [selectedScript, setSelectedScript] = useState<ScriptData | null>(savedState?.selectedScript || null);
+  // Script Generation state (no longer restored from sessionStorage - use database)
+  const [threeScripts, setThreeScripts] = useState<ScriptData[]>([]);
+  const [selectedScript, setSelectedScript] = useState<ScriptData | null>(null);
   const [isGeneratingScript, setIsGeneratingScript] = useState(false);
 
   // Image Viewer state
   const [imageViewerOpen, setImageViewerOpen] = useState(false);
   const [currentImageIndex, setCurrentImageIndex] = useState(0);
   const [viewingImages, setViewingImages] = useState<CompleteExtractedData['images']>([]);
+  
+  // Distribution dialog state
+  const [showReasonDialog, setShowReasonDialog] = useState(false);
+  const [distributionReason, setDistributionReason] = useState('');
+  const [creatingDistribution, setCreatingDistribution] = useState(false);
+  const [completedVideoBase64, setCompletedVideoBase64] = useState<string | null>(null);
+  const [completedSessionTitle, setCompletedSessionTitle] = useState<string>('');
 
-  // Auto-save workflow state whenever it changes
+  // Track last save time to prevent too frequent saves
+  const lastSaveTimeRef = useRef<number>(0);
+  const saveTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+
+  // Save state to thesis session at each step (with rate limit protection)
+  const saveStateToSession = async () => {
+    if (!thesisSessionId) return; // Only save if we have a session
+
+    try {
+      // Determine current stage based on workflow step
+      let currentStage = 'pdf_extraction';
+      if (currentStep === 'script-selection' || currentStep === 'script-editing') {
+        currentStage = threeScripts.length > 0 ? 'script_selection' : 'script_generation';
+      } else if (currentStep === 'video-generation') {
+        currentStage = 'video_generation';
+      } else if (currentStep === 'preview') {
+        currentStage = 'pdf_extraction';
+      }
+
+      // Prepare script data to save - convert blob URLs to base64
+      // CRITICAL: Always save complete script data to ensure nothing is lost
+      let scriptDataToSave = null;
+      if (threeScripts.length > 0 || selectedScript) {
+        try {
+          // Convert all scripts with full data preservation
+          const convertedScripts = threeScripts.length > 0 
+            ? await Promise.all(threeScripts.map(async (s) => {
+                try {
+                  const converted = await convertBlobsToBase64ForDB(s);
+                  return converted;
+                } catch (e) {
+                  console.error('Error converting script:', e);
+                  // If conversion fails, return original (it may already have base64)
+                  return s;
+                }
+              }))
+            : [];
+          
+          let convertedSelectedScript = null;
+          if (selectedScript) {
+            try {
+              convertedSelectedScript = await convertBlobsToBase64ForDB(selectedScript);
+            } catch (e) {
+              console.error('Error converting selected script:', e);
+              convertedSelectedScript = selectedScript; // Fallback to original
+            }
+          }
+          
+          scriptDataToSave = {
+            scripts: convertedScripts.filter(s => s !== null) as ScriptData[],
+            selectedScript: convertedSelectedScript,
+          };
+          
+          console.log('💾 Saving script data:', {
+            scriptsCount: scriptDataToSave.scripts.length,
+            hasSelectedScript: !!scriptDataToSave.selectedScript,
+          });
+        } catch (e) {
+          console.error('Error preparing script data:', e);
+          // Fallback: save original data (may have base64 already)
+          scriptDataToSave = {
+            scripts: threeScripts,
+            selectedScript: selectedScript,
+          };
+        }
+      }
+
+      // Save with complete data - ALWAYS save extractedData and scriptData
+      await thesisSessionService.updateSession(thesisSessionId, {
+        currentStage,
+        extractedData: extractedData || null, // Explicitly save extractedData
+        scriptData: scriptDataToSave, // Save script data
+      });
+      
+      console.log('✅ Successfully saved session data:', {
+        sessionId: thesisSessionId,
+        currentStage,
+        hasExtractedData: !!extractedData,
+        hasScriptData: !!scriptDataToSave,
+        scriptsCount: scriptDataToSave?.scripts?.length || 0,
+        hasSelectedScript: !!scriptDataToSave?.selectedScript,
+      });
+
+      // Create checkpoint at key stages (only once per stage - skip if rate limited)
+      if (currentStep === 'script-selection' && threeScripts.length > 0) {
+        try {
+          await thesisSessionService.createCheckpoint(thesisSessionId, {
+            stageName: 'script_generation',
+            stageData: {
+              extractedData,
+              scriptData: scriptDataToSave,
+            },
+          });
+        } catch (err: any) {
+          // Checkpoint might already exist or rate limited - ignore
+          if (err.response?.status !== 429) {
+            console.warn('Failed to create checkpoint:', err.message);
+          }
+        }
+      } else if (currentStep === 'script-editing' && selectedScript) {
+        try {
+          await thesisSessionService.createCheckpoint(thesisSessionId, {
+            stageName: 'script_selection',
+            stageData: {
+              extractedData,
+              scriptData: scriptDataToSave,
+            },
+          });
+        } catch (err: any) {
+          // Checkpoint might already exist or rate limited - ignore
+          if (err.response?.status !== 429) {
+            console.warn('Failed to create checkpoint:', err.message);
+          }
+        }
+      }
+
+      console.log('💾 State saved to thesis session:', { thesisSessionId, currentStage, currentStep });
+    } catch (error: any) {
+      // Handle 404 - session was deleted, clear invalid session ID
+      if (error.response?.status === 404 || error.message?.includes('not found')) {
+        console.log('ℹ️ Session not found during save (may have been deleted), clearing invalid session ID');
+        setThesisSessionId(null);
+        // Clear from sessionStorage
+        const savedState = loadWorkflowState();
+        if (savedState) {
+          saveWorkflowState({
+            currentStep: savedState.currentStep,
+            sessionId: savedState.sessionId,
+            thesisSessionId: null,
+          });
+        }
+        return;
+      }
+      
+      // Rate limit errors are expected, don't log
+      if (error.response?.status === 429) {
+        return;
+      }
+      
+      // Suppress timeout and network errors
+      const isNetworkError = error.code?.includes('ERR_NETWORK') || error.message?.includes('ERR_CONNECTION_REFUSED') || error.message?.includes('Network Error');
+      const isTimeoutError = error.code === 'ECONNABORTED' || error.message?.includes('timeout');
+      if (!isNetworkError && !isTimeoutError) {
+        console.warn('⚠️ Failed to save state to session:', error.message);
+      }
+    }
+  };
+
+  // Auto-save minimal workflow state to sessionStorage (only lightweight metadata)
+  // Full state is persisted in database via thesis sessions
   useEffect(() => {
     saveWorkflowState({
       currentStep,
-      selectedScript,
-      threeScripts,
       sessionId,
+      thesisSessionId,
     });
-  }, [currentStep, selectedScript, threeScripts, sessionId]);
+  }, [currentStep, sessionId, thesisSessionId]);
+
+  // Handle sessionId from URL parameter (when navigating from History page)
+  useEffect(() => {
+    if (sessionIdFromUrl && !thesisSessionId) {
+      // User clicked resume from History page - load the session
+      handleResumeSessionById(sessionIdFromUrl);
+    }
+  }, [sessionIdFromUrl]);
+
+  const handleResumeSessionById = async (sessionId: string) => {
+    try {
+      toast.info('Loading session...');
+      const session = await thesisSessionService.getSession(sessionId);
+      await handleResumeSessionDirect(session);
+      // Clear URL parameter after loading
+      window.history.replaceState({}, '', '/pdf-to-video');
+    } catch (error: any) {
+      // Handle 404 - session doesn't exist
+      if (error.response?.status === 404 || error.message?.includes('not found')) {
+        toast.error('Session not found. It may have been deleted.');
+        // Clear URL parameter
+        window.history.replaceState({}, '', '/pdf-to-video');
+        return;
+      }
+      
+      // Handle other errors
+      console.error('Failed to load session from URL:', error);
+      toast.error('Failed to load session: ' + (error.message || 'Unknown error'));
+      // Clear URL parameter on error too
+      window.history.replaceState({}, '', '/pdf-to-video');
+    }
+  };
+
+  const handleResumeSessionDirect = async (session: ThesisSession) => {
+    // Clear existing state first to ensure clean restoration
+    setExtractedData(null);
+    setThreeScripts([]);
+    setSelectedScript(null);
+    setThesisSessionId(null);
+    
+    // Set session ID
+    setThesisSessionId(session.id);
+    
+    // Restore extracted data
+    if (session.extractedData) {
+      console.log('✅ Restoring extracted data');
+      setExtractedData(session.extractedData);
+    }
+    
+    // Restore script data if available
+    if (session.scriptData) {
+      const scriptData = session.scriptData as any;
+      console.log('📝 Processing scriptData:', {
+        hasScripts: !!scriptData.scripts,
+        scriptsLength: scriptData.scripts?.length,
+        hasSelectedScript: !!scriptData.selectedScript,
+      });
+      
+      // Restore three scripts - convert base64 back to blob URLs
+      if (scriptData.scripts && Array.isArray(scriptData.scripts) && scriptData.scripts.length > 0) {
+        console.log('✅ Restoring scripts:', scriptData.scripts.length);
+        const restoredScripts = scriptData.scripts.map((s: any) => convertBase64ToBlobsFromDB(s)).filter((s: any) => s !== null) as ScriptData[];
+        setThreeScripts(restoredScripts);
+      }
+      
+      // Restore selected script - convert base64 back to blob URLs
+      if (scriptData.selectedScript) {
+        console.log('✅ Restoring selected script');
+        const restoredSelectedScript = convertBase64ToBlobsFromDB(scriptData.selectedScript);
+        if (restoredSelectedScript) {
+          setSelectedScript(restoredSelectedScript);
+        }
+      }
+    }
+    
+    // Determine current step based on stage and available data
+    let targetStep: WorkflowStep = 'preview';
+    
+    const scriptData = session.scriptData as any;
+    const hasScripts = scriptData?.scripts?.length > 0;
+    const hasSelectedScript = !!scriptData?.selectedScript;
+    
+    if (hasSelectedScript) {
+      targetStep = 'script-editing';
+    } else if (hasScripts) {
+      targetStep = 'script-selection';
+    } else if (session.extractedData) {
+      targetStep = 'preview';
+    } else {
+      targetStep = 'upload';
+    }
+    
+    console.log('📍 Resuming to step:', targetStep);
+    setCurrentStep(targetStep);
+    setShowSessionList(false);
+    
+    toast.success(`Resumed from "${session.title || 'session'}"`);
+  };
+
+  // Restore full state from database if thesisSessionId exists (on mount or when it changes)
+  // NOTE: This is now mainly for initial page load - handleResumeSession handles session restoration
+  useEffect(() => {
+    const restoreFromDatabase = async () => {
+      // Only restore on initial mount if we have a thesisSessionId and no extractedData yet
+      // Skip if handleResumeSession just ran (it handles restoration itself)
+      if (thesisSessionId && !extractedData && !sessionIdFromUrl) {
+        try {
+          console.log('🔄 Restoring thesis session from database:', thesisSessionId);
+          const session = await thesisSessionService.getSession(thesisSessionId);
+          
+          // Restore extracted data
+          if (session.extractedData) {
+            setExtractedData(session.extractedData);
+          }
+          
+          // Restore script data - convert base64 back to blob URLs
+          if (session.scriptData) {
+            const scriptData = session.scriptData as any;
+            if (scriptData.scripts && Array.isArray(scriptData.scripts) && scriptData.scripts.length > 0) {
+              const restoredScripts = scriptData.scripts.map((s: any) => convertBase64ToBlobsFromDB(s)).filter((s: any) => s !== null) as ScriptData[];
+              setThreeScripts(restoredScripts);
+            }
+            if (scriptData.selectedScript) {
+              const restoredSelectedScript = convertBase64ToBlobsFromDB(scriptData.selectedScript);
+              if (restoredSelectedScript) {
+                setSelectedScript(restoredSelectedScript);
+              }
+            }
+          }
+          
+          // Update current step based on restored state
+          const hasScripts = (session.scriptData as any)?.scripts?.length > 0;
+          const hasSelectedScript = !!(session.scriptData as any)?.selectedScript;
+          
+          if (hasSelectedScript) {
+            setCurrentStep('script-editing');
+          } else if (hasScripts) {
+            setCurrentStep('script-selection');
+          } else if (session.extractedData) {
+            setCurrentStep('preview');
+          }
+          
+          console.log('✅ Restored thesis session from database');
+        } catch (error: any) {
+          // Don't show error to user - they can continue normally
+          // Suppress timeout and network errors (backend slow/unavailable) to reduce console noise
+          const isNetworkError = error.code?.includes('ERR_NETWORK') || error.message?.includes('ERR_CONNECTION_REFUSED') || error.message?.includes('Network Error');
+          const isTimeoutError = error.code === 'ECONNABORTED' || error.message?.includes('timeout');
+          if (!isNetworkError && !isTimeoutError) {
+            console.error('❌ Failed to restore thesis session from database:', error);
+          }
+        }
+      }
+    };
+    
+    restoreFromDatabase();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [thesisSessionId]); // Only run when thesisSessionId changes (on mount or when resumed)
+
+  // REMOVED: Auto-save useEffect - saves are now only triggered explicitly on user actions
+  // This prevents continuous updates every few seconds
+  // Saves happen explicitly in:
+  // - handleExtractCompleteData (after PDF extraction)
+  // - handleGenerateScripts (after script generation)
+  // - handleSelectScript (after script selection)
+  // - handleScriptUpdate (after approving visuals/audio)
+  // - handleVideoExport (after video export)
 
   const steps: ProcessingStep[] = [
     {
@@ -189,12 +823,23 @@ export default function PdfToVideoPage() {
     setUploadedFile(null);
     setExtractedData(null);
     setSessionId(null);
+    setThesisSessionId(null);
     setThreeScripts([]);
     setSelectedScript(null);
     setProcessingSteps([]);
     setError(null);
     setCurrentStep('upload');
+    setShowSessionList(false);
     toast.info('Workflow reset - start over with a new PDF');
+  };
+
+  const handleResumeSession = async (session: ThesisSession) => {
+    await handleResumeSessionDirect(session);
+  };
+
+  const handleNewSession = () => {
+    handleResetWorkflow();
+    setShowSessionList(false);
   };
 
   const handleReExtract = async () => {
@@ -244,9 +889,43 @@ export default function PdfToVideoPage() {
 
       const response: LLMExtractionResponse = await grobidApi.extractCompleteData(uploadedFile);
 
+      console.log('📥 Extraction response:', {
+        status: response.status,
+        hasThesisSessionId: !!response.data?.thesisSessionId,
+        thesisSessionId: response.data?.thesisSessionId,
+        hasExtractedData: !!response.data?.extractedData,
+        fullResponse: response,
+      });
+
       if (response.status === "success") {
         setExtractedData(response.data.extractedData);
         setSessionId(response.data.sessionId);
+        
+        // Capture thesisSessionId if available (from backend auto-creation)
+        // Response structure: { status, message, data: { thesisSessionId, ... } }
+        const thesisSessionId = response.data.thesisSessionId;
+        if (thesisSessionId) {
+          console.log('✅ Thesis session created:', thesisSessionId);
+          setThesisSessionId(thesisSessionId);
+          toast.success("Thesis session saved! You can continue later.");
+          // Refresh the list to show the new session - force immediate refresh
+          setTimeout(() => {
+            setListRefreshTrigger(prev => prev + 1);
+          }, 500);
+        } else {
+          console.warn('⚠️ No thesisSessionId in response - session may not have been created');
+          console.log('Response structure:', {
+            status: response.status,
+            hasData: !!response.data,
+            dataKeys: response.data ? Object.keys(response.data) : [],
+            fullResponse: JSON.stringify(response, null, 2),
+          });
+          
+          // Try to load sessions anyway - maybe it was created but not returned
+          setTimeout(() => {
+            setListRefreshTrigger(prev => prev + 1);
+          }, 1000);
+        }
 
         // Mark all steps as completed
         setProcessingSteps((prev) =>
@@ -255,6 +934,15 @@ export default function PdfToVideoPage() {
 
         toast.success("LLM extraction completed successfully!");
         setCurrentStep('preview');
+        setShowSessionList(false); // Hide list after starting new extraction
+        
+        // Save state after extraction (if session exists) - immediate save allowed
+        if (thesisSessionId) {
+          setTimeout(() => {
+            lastSaveTimeRef.current = Date.now();
+            saveStateToSession();
+          }, 1000);
+        }
       } else {
         throw new Error(response.message || 'Extraction failed');
       }
@@ -305,6 +993,13 @@ export default function PdfToVideoPage() {
       const scripts = await geminiService.generate3Scripts(jsonData);
       setThreeScripts(scripts);
       setCurrentStep('script-selection');
+      
+      // Save state to session after scripts are generated (immediate save)
+      if (thesisSessionId) {
+        lastSaveTimeRef.current = Date.now();
+        await saveStateToSession();
+      }
+      
       toast.success('3 scripts generated successfully!');
     } catch (error) {
       console.error('Error generating scripts:', error);
@@ -314,9 +1009,16 @@ export default function PdfToVideoPage() {
     }
   };
 
-  const handleSelectScript = (script: ScriptData) => {
+  const handleSelectScript = async (script: ScriptData) => {
     setSelectedScript(script);
     setCurrentStep('script-editing');
+    
+    // Save state to session after script is selected (immediate save)
+    if (thesisSessionId) {
+      lastSaveTimeRef.current = Date.now();
+      await saveStateToSession();
+    }
+    
     toast.success('You can now edit and approve sentences');
   };
 
@@ -373,6 +1075,18 @@ export default function PdfToVideoPage() {
     };
 
     setSelectedScript(updatedScript);
+    
+    // Save immediately when script is updated
+    if (thesisSessionId) {
+      // Use a debounced save to avoid multiple rapid saves
+      if (saveTimeoutRef.current) {
+        clearTimeout(saveTimeoutRef.current);
+      }
+      saveTimeoutRef.current = setTimeout(() => {
+        lastSaveTimeRef.current = Date.now();
+        saveStateToSession();
+      }, 1000); // 1 second debounce
+    }
   };
 
   const handleScriptUpdate = (updatedScript: ScriptData) => {
@@ -407,7 +1121,19 @@ export default function PdfToVideoPage() {
       );
     }
     
-    // Auto-save will be triggered by useEffect
+    // Save when videos/visuals/audio are approved or updated (with debounce)
+    if (thesisSessionId) {
+      // Clear any pending save
+      if (saveTimeoutRef.current) {
+        clearTimeout(saveTimeoutRef.current);
+      }
+      // Debounce to avoid multiple rapid saves
+      saveTimeoutRef.current = setTimeout(() => {
+        lastSaveTimeRef.current = Date.now();
+        saveStateToSession();
+      }, 1000); // 1 second debounce
+    }
+    
     if (approvedVisualsCount > 0 && currentStep === 'script-editing') {
       console.log('✅ Approved visuals detected:', approvedVisualsCount, '- VideoTimelineEditor should show them');
     }
@@ -417,6 +1143,198 @@ export default function PdfToVideoPage() {
     const paperTitle = extractedData?.metadata?.title || 'Untitled Paper';
     const exportData = geminiService.exportScript(data, paperTitle);
     geminiService.downloadScript(exportData);
+  };
+
+  // Handle video export from VideoTimelineEditor
+  const handleVideoExport = async (_videoUrl: string, videoBase64: string) => {
+    console.log('🟢 handleVideoExport called with videoBase64 length:', videoBase64?.length || 0);
+    console.log('🟢 thesisSessionId:', thesisSessionId);
+    
+    if (!thesisSessionId) {
+      toast.error('No session found. Please create a session first.');
+      return;
+    }
+
+    // Get session title immediately (lightweight call is fast)
+    console.log('🟢 Getting session title...');
+    let sessionTitle = 'Untitled Thesis';
+    try {
+      const session = await thesisSessionService.getSession(thesisSessionId, true); // Lightweight mode
+      if (session.title) {
+        sessionTitle = session.title;
+      }
+    } catch (e) {
+      console.warn('Failed to get session title:', e);
+    }
+    
+    // IMMEDIATELY store video data and show dialog - don't wait for DB save
+    console.log('🟢 Storing video data and showing dialog immediately...');
+    setCompletedVideoBase64(videoBase64);
+    setCompletedSessionTitle(sessionTitle); // Use actual thesis title
+    
+    // Show dialog IMMEDIATELY
+    setShowReasonDialog(true);
+    toast.success('✅ Video ready! Please provide reason for distribution.');
+    console.log('🟢 Reason dialog shown immediately');
+
+    // Save to database in background (non-blocking)
+    (async () => {
+      try {
+        console.log('🟢 [Background] Getting full session for saving...');
+        const fullSession = await thesisSessionService.getSession(thesisSessionId, false);
+        console.log('🟢 [Background] Full session retrieved');
+        
+        // Parse scriptData if it's a string, otherwise use as-is
+        let currentScriptData: any = {};
+        if (fullSession.scriptData) {
+          if (typeof fullSession.scriptData === 'string') {
+            try {
+              currentScriptData = JSON.parse(fullSession.scriptData);
+            } catch (e) {
+              console.error('Failed to parse scriptData:', e);
+              currentScriptData = {};
+            }
+          } else {
+            currentScriptData = fullSession.scriptData;
+          }
+        }
+
+        // Update scriptData to include final video
+        const updatedScriptData = {
+          ...currentScriptData,
+          finalVideo: {
+            videoBase64: videoBase64,
+            exportedAt: new Date().toISOString(),
+            isExported: true,
+          },
+        };
+
+        // Parse videoLogs if it's a string, otherwise use as-is
+        let currentVideoLogs: any = {};
+        if (fullSession.videoLogs) {
+          if (typeof fullSession.videoLogs === 'string') {
+            try {
+              currentVideoLogs = JSON.parse(fullSession.videoLogs);
+            } catch (e) {
+              console.error('Failed to parse videoLogs:', e);
+              currentVideoLogs = {};
+            }
+          } else {
+            currentVideoLogs = fullSession.videoLogs;
+          }
+        }
+
+        // Update videoLogs to mark as exported
+        const updatedVideoLogs = {
+          ...currentVideoLogs,
+          finalVideo: {
+            videoBase64: videoBase64,
+            exportedAt: new Date().toISOString(),
+            isExported: true,
+          },
+        };
+
+        // Save to session (background, non-blocking)
+        console.log('🟢 [Background] Saving to session...');
+        await thesisSessionService.updateSession(thesisSessionId, {
+          scriptData: updatedScriptData,
+          videoLogs: updatedVideoLogs,
+          currentStage: 'video_completed',
+        });
+        console.log('🟢 [Background] Session updated successfully');
+      } catch (error: any) {
+        console.error('⚠️ [Background] Failed to save session (non-blocking):', error);
+        // Don't block dialog - user can still create distribution request
+      }
+    })();
+  };
+
+
+  const handleCreateDistributionRequest = async () => {
+    if (!thesisSessionId || !distributionReason.trim()) {
+      toast.error('Please provide a reason for distribution');
+      return;
+    }
+
+    try {
+      setCreatingDistribution(true);
+
+      // Use stored video base64 (avoid expensive DB query with large JSON)
+      const videoBase64 = completedVideoBase64;
+      if (!videoBase64) {
+        toast.error('Video data not found. Please complete the video again.');
+        setShowReasonDialog(false);
+        return;
+      }
+
+      // Check SNS connections
+      const [youtubeStatus, xStatus] = await Promise.all([
+        snsService.getConnectionStatus('youtube').catch(() => ({ connected: false })),
+        snsService.getConnectionStatus('x').catch(() => ({ connected: false })),
+      ]);
+
+      const platforms: ('youtube' | 'x')[] = [];
+      if (youtubeStatus.connected) platforms.push('youtube');
+      if (xStatus.connected) platforms.push('x');
+
+      if (platforms.length === 0) {
+        toast.error('Please connect at least one platform (YouTube or X) in Settings first');
+        setShowReasonDialog(false);
+        navigate('/dashboard/settings/sns');
+        return;
+      }
+
+      // Get thesis description from session (abstract or description from extractedData)
+      let thesisDescription = '';
+      try {
+        const fullSession = await thesisSessionService.getSession(thesisSessionId, false); // Get full session for extractedData
+        if (fullSession.extractedData) {
+          const extracted = typeof fullSession.extractedData === 'string' 
+            ? JSON.parse(fullSession.extractedData) 
+            : fullSession.extractedData;
+          thesisDescription = extracted.metadata?.abstract || extracted.sections?.abstract || extracted.sections?.description || '';
+        }
+      } catch (e) {
+        console.warn('Failed to get thesis description:', e);
+      }
+
+      // Create distribution request
+      // Title = thesis title (from session)
+      // Description = thesis abstract/description (NOT the reason)
+      // Store reason in xSettings.requestReason (shown to admin separately)
+      const requestPayload = {
+        thesisSessionId: thesisSessionId,
+        videoUrl: `data:video/mp4;base64,${videoBase64}`,
+        title: completedSessionTitle || 'Untitled Thesis',
+        description: thesisDescription, // Thesis abstract/description, NOT the reason
+        platforms: platforms,
+        youtubeSettings: { privacy: 'private' as 'public' | 'private' | 'unlisted' },
+        xSettings: {
+          requestReason: distributionReason.trim(), // Store reason separately in xSettings
+        },
+      };
+      
+      console.log('📤 Creating distribution request with reason:', {
+        hasReason: !!distributionReason.trim(),
+        reasonLength: distributionReason.trim().length,
+        xSettings: requestPayload.xSettings,
+      });
+      
+      await distributionService.createRequest(requestPayload);
+
+      toast.success('✅ Distribution request created successfully!');
+      setShowReasonDialog(false);
+      setDistributionReason('');
+      setCompletedVideoBase64(null); // Clear stored video data
+      setCompletedSessionTitle('');
+      
+      // Stay on same page - do NOT navigate away
+    } catch (error: any) {
+      console.error('Failed to create distribution request:', error);
+      toast.error('Failed to create distribution request: ' + (error.message || 'Unknown error'));
+    } finally {
+      setCreatingDistribution(false);
+    }
   };
 
   const copyToClipboard = async (text: string) => {
@@ -490,11 +1408,40 @@ export default function PdfToVideoPage() {
       <div className="space-y-6">
         {/* Header */}
         <div className="space-y-2">
+          <div className="flex items-center justify-between">
+            <div>
           <h1 className="text-3xl font-bold tracking-tight">PDF to Video Workflow</h1>
           <p className="text-muted-foreground">
             Complete workflow: Upload PDF → Extract Data → Generate Script → Edit Script → Generate Video → Export
           </p>
+            </div>
+            <Button
+              variant="outline"
+              onClick={() => {
+                setShowSessionList(!showSessionList);
+                // Force refresh when showing the list
+                if (!showSessionList) {
+                  setTimeout(() => {
+                    setListRefreshTrigger(prev => prev + 1);
+                  }, 100);
+                }
+              }}
+            >
+              <History className="h-4 w-4 mr-2" />
+              {showSessionList ? 'Hide' : 'Show'} History
+            </Button>
+          </div>
         </div>
+
+        {/* Thesis Session List */}
+        {showSessionList && (
+          <ThesisSessionList
+            onSelectSession={handleResumeSession}
+            onNewSession={handleNewSession}
+            currentSessionId={thesisSessionId}
+            refreshTrigger={listRefreshTrigger}
+          />
+        )}
 
         {/* Step Progress Indicator */}
         <Card>
@@ -968,6 +1915,7 @@ export default function PdfToVideoPage() {
               onApprove={handleApproveSentence}
               onRegenerate={handleRegenerateScript}
               onExport={handleExportScript}
+              onVideoExport={handleVideoExport}
               onScriptUpdate={handleScriptUpdate}
               isLoading={isGeneratingScript}
               tables={extractedData?.tables.map(t => ({ title: t.title, data: t.data }))}
@@ -1014,6 +1962,7 @@ export default function PdfToVideoPage() {
               onApprove={handleApproveSentence}
               onRegenerate={handleRegenerateScript}
               onExport={handleExportScript}
+              onVideoExport={handleVideoExport}
               onScriptUpdate={handleScriptUpdate}
               isLoading={isGeneratingScript}
               tables={extractedData?.tables.map(t => ({ title: t.title, data: t.data }))}
@@ -1049,6 +1998,56 @@ export default function PdfToVideoPage() {
           />
         )}
       </div>
+      
+      {/* Reason Dialog - Asks for distribution reason */}
+      <Dialog open={showReasonDialog} onOpenChange={setShowReasonDialog}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Request Distribution</DialogTitle>
+            <DialogDescription>
+              Please provide a reason for distributing this video.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4 py-4">
+            <div className="space-y-2">
+              <Label htmlFor="reason">Reason *</Label>
+              <Textarea
+                id="reason"
+                placeholder="Enter the reason for distributing this video..."
+                value={distributionReason}
+                onChange={(e) => setDistributionReason(e.target.value)}
+                rows={4}
+                className="resize-none"
+              />
+            </div>
+          </div>
+          <DialogFooter className="gap-2">
+            <Button
+              variant="outline"
+              onClick={() => {
+                setShowReasonDialog(false);
+                setDistributionReason('');
+              }}
+              disabled={creatingDistribution}
+            >
+              Cancel
+            </Button>
+            <Button
+              onClick={handleCreateDistributionRequest}
+              disabled={creatingDistribution || !distributionReason.trim()}
+            >
+              {creatingDistribution ? (
+                <>
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  Creating...
+                </>
+              ) : (
+                'Submit Request'
+              )}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </DashboardLayout>
-  );
-}
+    );
+  }
